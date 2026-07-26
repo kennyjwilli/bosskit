@@ -13,7 +13,7 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 
 const QUEUES = defineQueues([
-  { name: "send-email-dlq", schema: UserScopedSchema.extend({ to: z.string() }), options: {} },
+  { name: "send-email-dlq", schema: UserScopedSchema.extend({ to: z.string() }) },
   {
     name: "send-email",
     schema: UserScopedSchema.extend({ to: z.string() }),
@@ -24,7 +24,6 @@ const QUEUES = defineQueues([
     name: "nightly-cleanup",
     global: true,
     schema: z.object({ olderThanDays: z.number() }),
-    options: {},
   },
 ]);
 
@@ -101,7 +100,6 @@ defineQueues([
     name: "nightly-cleanup",
     global: true,
     schema: z.object({ olderThanDays: z.number() }),
-    options: {},
   },
 ]);
 ```
@@ -119,7 +117,7 @@ annotation:
 
 ```ts
 const QUEUES = defineQueues([
-  { name: "send-email", schema: UserScopedSchema.extend({ to: z.string() }), options: {} },
+  { name: "send-email", schema: UserScopedSchema.extend({ to: z.string() }) },
 ]);
 ```
 
@@ -145,10 +143,10 @@ Two spellings destroy them, and both type-check:
 ```ts
 // Both compile. Both throw the registry's precise types away.
 const widened: QueueDefinition[] = [
-  { name: "send-email", schema: UserScopedSchema.extend({ to: z.string() }), options: {} },
+  { name: "send-email", schema: UserScopedSchema.extend({ to: z.string() }) },
 ];
 const alsoWidened: readonly QueueDefinition[] = [
-  { name: "send-email", schema: UserScopedSchema.extend({ to: z.string() }), options: {} },
+  { name: "send-email", schema: UserScopedSchema.extend({ to: z.string() }) },
 ];
 ```
 
@@ -171,7 +169,7 @@ Point a queue's `deadLetter` option at another queue's name:
 
 ```ts
 defineQueues([
-  { name: "send-email-dlq", schema: UserScopedSchema.extend({ to: z.string() }), options: {} },
+  { name: "send-email-dlq", schema: UserScopedSchema.extend({ to: z.string() }) },
   {
     name: "send-email",
     schema: UserScopedSchema.extend({ to: z.string() }),
@@ -414,7 +412,8 @@ applySchedules, schemaFor }` bound to that registry:
   a no-op. Cancelling stops a queued job from starting and prevents a retry of
   an active one, but does **not** abort a job already running on a worker —
   interrupt that in-process.
-- **`defineWorker`** — see [Workers](#workers).
+- **`defineWorker`** — see [Workers](#workers). `options` is optional —
+  omit it entirely for a worker with nothing to configure.
 - **`ensureQueues(boss)`** — creates any queue in the registry pg-boss doesn't
   have yet, and updates options on ones that already exist (`policy` and
   `partition` are immutable in pg-boss, so those are left alone on existing
@@ -434,7 +433,10 @@ applySchedules, schemaFor }` bound to that registry:
 ### `defineQueues(definitions)`
 
 Declares a queue registry. See [`defineQueues`](#definequeues) above. Returns
-the array unchanged — its only job is to pin the `const` type parameter.
+the array unchanged — its only job is to pin the `const` type parameter. Each
+entry is a `QueueDefinition`: `name`, `schema`, an optional `global`, and an
+optional `options` (pg-boss's `createQueue` options minus `name`) — omit
+`options` entirely for a queue with nothing to configure.
 
 ### `UserScopedSchema`
 

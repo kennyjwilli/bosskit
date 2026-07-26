@@ -21,8 +21,8 @@ describe("createJobPlatform registry validation", () => {
     // validate half the payloads against the wrong shape. TypeScript can't
     // catch it: the derived payload map just merges the duplicate key.
     const definitions = [
-      { name: "dupe", schema: $Payload, options: {} },
-      { name: "dupe", schema: $Payload.extend({ extra: z.string() }), options: {} },
+      { name: "dupe", schema: $Payload },
+      { name: "dupe", schema: $Payload.extend({ extra: z.string() }) },
     ] as const satisfies readonly QueueDefinition[];
 
     expect(() => createJobPlatform({ ...PROVIDERS, definitions })).toThrow(JobPlatformError);
@@ -33,8 +33,8 @@ describe("createJobPlatform registry validation", () => {
 
   it("accepts a registry whose queue names are unique", () => {
     const definitions = [
-      { name: "a", schema: $Payload, options: {} },
-      { name: "b", schema: $Payload, options: {} },
+      { name: "a", schema: $Payload },
+      { name: "b", schema: $Payload },
     ] as const satisfies readonly QueueDefinition[];
 
     expect(() => createJobPlatform({ ...PROVIDERS, definitions })).not.toThrow();
@@ -117,7 +117,7 @@ describe("defineWorker payload parsing", () => {
     tier: z.string().default("free"),
     userId: z.string(),
   });
-  const DEFINITIONS = defineQueues([{ name: "probe", schema: $Coercing, options: {} }]);
+  const DEFINITIONS = defineQueues([{ name: "probe", schema: $Coercing }]);
 
   function platformFor(boss: PgBoss) {
     return createJobPlatform({
@@ -135,7 +135,6 @@ describe("defineWorker payload parsing", () => {
 
     const worker = platformFor(boss).defineWorker({
       queue: "probe",
-      options: {},
       handler: async ({ jobs }) => {
         for (const job of jobs) seen.push(job.data);
       },
@@ -160,7 +159,6 @@ describe("defineWorker payload parsing", () => {
 
     const worker = platformFor(boss).defineWorker({
       queue: "probe",
-      options: {},
       handler: async ({ jobs }) => {
         seenId = jobs[0]?.id;
       },
@@ -177,7 +175,6 @@ describe("defineWorker payload parsing", () => {
 
     const worker = platformFor(boss).defineWorker({
       queue: "probe",
-      options: {},
       handler: async () => {
         handlerRan = true;
       },
@@ -201,7 +198,7 @@ describe("schemaFor", () => {
     // A registry whose type has widened to `QueueDefinition[]` — the spelling
     // that makes every derived name type collapse to `string`, so an unknown
     // queue name reaches `schemaFor` without a compile error.
-    const definitions: QueueDefinition[] = [{ name: "known", schema: $Payload, options: {} }];
+    const definitions: QueueDefinition[] = [{ name: "known", schema: $Payload }];
     const platform = createJobPlatform({ ...PROVIDERS, definitions });
 
     expect(() => platform.schemaFor("missing")).toThrow(JobPlatformError);

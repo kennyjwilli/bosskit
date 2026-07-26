@@ -13,7 +13,6 @@ describe("user-scoped queue definitions", () => {
     // A queue with no `global` flag must carry a user in its payload.
     const userScoped: QueueDefinition = {
       name: "example",
-      options: {},
       schema: z.object({ userId: z.string(), thing: z.string() }),
     };
     expect(userScoped.name).toBe("example");
@@ -21,7 +20,6 @@ describe("user-scoped queue definitions", () => {
     // @ts-expect-error a default (user-scoped) queue may not omit userId
     const missingUser: QueueDefinition = {
       name: "example",
-      options: {},
       schema: z.object({ thing: z.string() }),
     };
     expect(missingUser.name).toBe("example");
@@ -29,7 +27,6 @@ describe("user-scoped queue definitions", () => {
     // @ts-expect-error userId must be a string
     const wrongUserType: QueueDefinition = {
       name: "example",
-      options: {},
       schema: z.object({ userId: z.number() }),
     };
     expect(wrongUserType.name).toBe("example");
@@ -39,7 +36,6 @@ describe("user-scoped queue definitions", () => {
     const globalQueue: QueueDefinition = {
       name: "example",
       global: true,
-      options: {},
       schema: z.object({ thing: z.string() }),
     };
     expect(globalQueue.name).toBe("example");
@@ -54,7 +50,7 @@ describe("defineQueues", () => {
     const QUEUES = defineQueues([
       { name: "a-dlq", schema: $A, options: { retryLimit: 2 } },
       { name: "a", schema: $A, options: { deadLetter: "a-dlq" } },
-      { name: "b", schema: $B, options: {} },
+      { name: "b", schema: $B },
     ]);
 
     // Sendable excludes the dead-letter target.
@@ -80,7 +76,7 @@ describe("defineQueues", () => {
 
   it("still rejects a payload schema that does not produce a userId", () => {
     // @ts-expect-error schema must satisfy z.ZodType<UserScoped> unless global: true
-    const bad = defineQueues([{ name: "x", schema: z.object({ q: z.string() }), options: {} }]);
+    const bad = defineQueues([{ name: "x", schema: z.object({ q: z.string() }) }]);
     expect(bad).toHaveLength(1);
   });
 });

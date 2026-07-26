@@ -16,7 +16,7 @@ import { defineQueues } from "./types";
 
 const $Payload = z.object({ note: z.string(), userId: z.string() });
 
-const DEFINITIONS = defineQueues([{ name: "probe-queue", schema: $Payload, options: {} }]);
+const DEFINITIONS = defineQueues([{ name: "probe-queue", schema: $Payload }]);
 
 describe("createJobPlatform (integration)", () => {
   let teardown: () => Promise<void>;

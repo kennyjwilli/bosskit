@@ -183,7 +183,7 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
    */
   function defineWorker<Q extends Name>(w: {
     queue: Q;
-    options: Omit<WorkOptions, "includeMetadata">;
+    options?: Omit<WorkOptions, "includeMetadata">;
     handler: (ctx: R & { jobs: JobWithMetadata<Payload<Q>>[] }) => Promise<void>;
   }): RegisteredWorker {
     return {
@@ -239,7 +239,11 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
     for (const def of definitions) {
       // Widen the `as const` options back to the mutable, all-optional pg-boss
       // shape so we can strip the immutable fields without narrowing errors.
-      const options: Omit<NonNullable<Parameters<PgBoss["createQueue"]>[1]>, "name"> = def.options;
+      // Definitions with nothing to configure omit `options` entirely.
+      const options: Omit<
+        NonNullable<Parameters<PgBoss["createQueue"]>[1]>,
+        "name"
+      > = def.options ?? {};
       const existing = await boss.getQueue(def.name);
       if (existing) {
         const { policy: _policy, partition: _partition, ...updatable } = options;

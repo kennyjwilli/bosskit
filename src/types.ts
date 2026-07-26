@@ -32,7 +32,8 @@ type QueueOptions = NonNullable<Parameters<PgBoss["createQueue"]>[1]>;
 
 type QueueDefinitionBase = {
   name: string;
-  options: Omit<QueueOptions, "name">;
+  /** pg-boss queue options. Omit entirely for a queue with nothing to configure. */
+  options?: Omit<QueueOptions, "name">;
 };
 
 /**
@@ -101,12 +102,27 @@ export type QueuePayloadOf<
 > = QueuePayloadMapOf<D>[Q] & object;
 
 /**
+ * Per-slot `options`, defaulting to `undefined` for a definition that omits it
+ * entirely. A plain `D[number]["options"]` indexed access does not work once
+ * `options` is optional: a tuple entry that omits the key altogether has no
+ * `options` property at all, and indexed access on a union requires every
+ * member to carry the key, so the lookup would fail to compile the moment any
+ * entry left `options` out. Distributing over `keyof D` (each tuple slot,
+ * rather than the merged `D[number]` union) sidesteps that — an entry without
+ * `options` just contributes `undefined` instead of breaking the type for
+ * every other entry.
+ */
+type OptionsTupleOf<D extends readonly QueueDefinition[]> = {
+  [K in keyof D]: "options" extends keyof D[K] ? D[K]["options"] : undefined;
+};
+
+/**
  * Every dead-letter target named by some queue's `deadLetter` option. You never
  * enqueue to a DLQ (pg-boss copies failed jobs into it automatically), so these
  * are excluded from the enqueue-able set below.
  */
 type DeadLetterOf<D extends readonly QueueDefinition[]> = Extract<
-  D[number]["options"],
+  OptionsTupleOf<D>[number],
   { deadLetter: string }
 >["deadLetter"];
 

@@ -36,6 +36,12 @@ await enqueue({ db, queue: "send-email", data: { to: "a@b.com", userId: "user_12
 await enqueue({ db, queue: "send-email-dlq", data: { to: "a@b.com", userId: "user_123" } });
 ```
 
+Call `ensureQueues(boss)` once on boot, before enqueuing to or working any
+queue — it creates whatever queue in the registry pg-boss doesn't have yet,
+and syncs options on the ones it does. See
+[`createJobPlatform`](#createjobplatformoptions) below for what each of the
+seven returned functions does.
+
 ## Install
 
 ```sh
@@ -250,6 +256,14 @@ await db.transaction(async (tx) => {
 });
 ```
 
+For `tx` to typecheck as `enqueue`'s `db` argument, the type you use for `Db`
+(the parameter type of your `toBossDb` function) must be drizzle's abstract
+`PgDatabase` supertype, not a concrete instantiation like the type
+`drizzle(...)` itself returns — the concrete type carries an extra `$client`
+property that a transaction handle doesn't have, so it rejects `tx`. Typing
+`Db` as the `PgDatabase` supertype is exactly what lets one `enqueue` function
+accept both a pool handle and a transaction handle.
+
 ## Testing / contributing
 
 Unit tests need no external services:
@@ -283,9 +297,12 @@ pnpm test:integration
 pnpm build
 ```
 
-`pnpm prepublishOnly` runs `check`, `typecheck`, `test`, and `build` in
-sequence — the same gate CI enforces and the one `npm publish` runs
-automatically.
+`pnpm prepublishOnly` runs `check`, `typecheck`, `test`, and `build` — the
+same steps CI runs, minus `test:integration`. That omission is deliberate:
+cutting a release shouldn't require a disposable Postgres container on hand,
+and by the time a release is cut, CI has already run the full suite —
+including integration tests — against the commit being published. Integration
+coverage lives in CI, not in the publish gate.
 
 ## API reference
 
@@ -296,7 +313,33 @@ The framework's entry point. Takes `definitions` (a registry from
 `getRuntime` (resolves the context object passed to every worker handler),
 `toBossDb` (adapts your database handle to pg-boss's `Db` contract), and
 `logger`. Returns `{ enqueue, enqueueWith, cancelJobs, defineWorker,
-ensureQueues, applySchedules, schemaFor }` bound to that registry.
+ensureQueues, applySchedules, schemaFor }` bound to that registry:
+
+- **`enqueue`** — the sanctioned way to create a job. See the opening example.
+- **`enqueueWith(boss, args)`** — the same as `enqueue`, but takes an explicit
+  `PgBoss` instance instead of resolving one through `getBoss`. `enqueue` is
+  just `enqueueWith` bound to `getBoss()`; the explicit-instance form exists
+  so tests can pass a boss they control directly, without wiring a `getBoss`
+  provider around it.
+- **`cancelJobs(queue, jobIds)`** — best-effort cancellation by id (e.g. when
+  the domain record a job represents gets cancelled). Already-settled ids are
+  a no-op. Cancelling stops a queued job from starting and prevents a retry of
+  an active one, but does **not** abort a job already running on a worker —
+  interrupt that in-process.
+- **`defineWorker`** — see [Workers](#workers).
+- **`ensureQueues(boss)`** — creates any queue in the registry pg-boss doesn't
+  have yet, and updates options on ones that already exist (`policy` and
+  `partition` are immutable in pg-boss, so those are left alone on existing
+  queues). Note: pg-boss's `update_queue` COALESCEs unspecified options to
+  their current values, so removing an option from a definition does not
+  reset it on an already-created queue — that needs a fresh queue or manual
+  intervention. Call it on boot, before enqueuing to or working any queue.
+- **`applySchedules`** — see [Schedules](#schedules).
+- **`schemaFor(queue)`** — looks up a queue's payload schema at runtime, typed
+  so `.parse()` returns that queue's payload. This is what `enqueue` and
+  worker validation use internally to validate at both boundaries; exposed so
+  application code can validate or parse a payload against the same schema
+  outside those paths.
 
 ### `defineQueues(definitions)`
 
@@ -311,16 +354,29 @@ payload schema should `.extend()`.
 ### `createBoss(options)`
 
 A thin, opinionated `PgBoss` factory: sets `application_name`, a default
-`max` pool size and `schema`, and wires the `error`/`warning` events to your
-logger so an unhandled pg-boss `error` event can't crash the process. Takes
-`connectionString`, `migrate`, and `logger`, with optional `max`,
-`applicationName`, and `schema`. Returns a plain `PgBoss` instance — starting,
-stopping, and caching it is still your responsibility.
+`max` pool size (`5`) and `schema` (`"pgboss"`), and wires the
+`error`/`warning` events to your logger so an unhandled pg-boss `error` event
+can't crash the process. Takes `connectionString`, `migrate`, and `logger`,
+with optional `max`, `applicationName` (defaults to `"bosskit"`), and
+`schema` (defaults to `"pgboss"`). Returns a plain `PgBoss` instance —
+starting, stopping, and caching it is still your responsibility.
 
 ### `fromDrizzlePostgres(db, sql)` (`bosskit/drizzle`)
 
 Adapts a drizzle postgres-js handle (pool or transaction) plus its `sql` tag
 into pg-boss's `Db` contract. See [Adapters](#adapters) above.
+
+### `parsePlaceholders(text, values)` (`bosskit/drizzle`)
+
+Parses `$N`-style SQL placeholders out of `text` into literal string segments
+plus the corresponding values in textual order (`{ parts, reordered }`),
+duplicating a value at each occurrence if its placeholder index repeats. It
+re-implements a helper pg-boss keeps as an unexported internal, and is used by
+`fromDrizzlePostgres` to rebuild a tagged-template call for drizzle's `sql`
+function. Exported because anyone writing their own drizzle-flavored adapter
+(see [Writing your own](#writing-your-own)) needs the same parsing and would
+otherwise have to duplicate it — it is not needed for ordinary usage of
+`fromDrizzlePostgres`.
 
 ### `ScheduleDefinition<Name>` / `schedulesToRemove(declared, existing)`
 

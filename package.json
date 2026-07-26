@@ -5,6 +5,7 @@
   "license": "MIT",
   "author": "Kenny Williams",
   "type": "module",
+  "packageManager": "pnpm@10.29.1",
   "sideEffects": false,
   "files": ["dist", "README.md", "LICENSE"],
   "exports": {

@@ -164,11 +164,14 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
    * inferred from `getRuntime`) plus the validated, typed jobs — so handlers
    * never open a database connection or parse payloads themselves.
    *
-   * Each job's payload is validated against the queue's schema at this boundary
-   * before the handler runs; a payload that fails validation throws, so the job
-   * fails → pg-boss retries → dead-letters, like any other handler error. Every
-   * job is also logged here with its queue, id, retry count and acting user, so
-   * no handler has to remember to trace who a job is for.
+   * Each job's payload is parsed through the queue's schema at this boundary and
+   * the handler receives the PARSED jobs, so coercions and defaults declared in
+   * the schema are already applied when it runs. A payload that fails validation
+   * throws, so the job fails → pg-boss retries → dead-letters, like any other
+   * handler error; parsing is per batch, so one bad payload fails the whole
+   * batch it arrived in. Every job is also logged here with its queue, id, retry
+   * count and acting user, so no handler has to remember to trace who a job is
+   * for.
    */
   function defineWorker<Q extends Name>(w: {
     queue: Q;
@@ -189,11 +192,16 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
           w.queue,
           { ...w.options, includeMetadata: true },
           async (jobs: JobWithMetadata<Payload<Q>>[]) => {
+            // The handler is handed the PARSED jobs, not the raw ones. `data`
+            // arrives as jsonb, and the handler's type is the schema's OUTPUT
+            // type — so a `z.coerce.date()` field must reach it as a Date and a
+            // `.default()` field must be filled in, not left undefined.
+            const parsed: JobWithMetadata<Payload<Q>>[] = [];
             for (const job of jobs) {
-              schema.parse(job.data);
+              const data = schema.parse(job.data);
               // Uniform actor trace for every queue. safeParse (not a cast) so
               // this also works for `global` queues, whose payloads carry no user.
-              const actor = $UserScoped.safeParse(job.data);
+              const actor = $UserScoped.safeParse(data);
               logger.info(
                 {
                   jobId: job.id,
@@ -203,8 +211,9 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
                 },
                 "job received"
               );
+              parsed.push({ ...job, data });
             }
-            await w.handler({ ...runtime, jobs });
+            await w.handler({ ...runtime, jobs: parsed });
           }
         );
       },

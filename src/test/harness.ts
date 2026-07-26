@@ -22,7 +22,8 @@ export async function setupTestDb(options: { testFile: string }): Promise<{
   const adminUrl = process.env.TEST_DATABASE_URL;
   if (!adminUrl) {
     throw new Error(
-      "TEST_DATABASE_URL is not set — see CONTRIBUTING or scripts/test-integration.sh"
+      "TEST_DATABASE_URL is not set — point it at a Postgres this test run may " +
+        "freely CREATE and DROP databases on (see 'Testing / contributing' in README.md)."
     );
   }
 

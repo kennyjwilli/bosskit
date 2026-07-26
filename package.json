@@ -36,7 +36,7 @@
     "node": ">=22.12.0"
   },
   "peerDependencies": {
-    "pg-boss": ">=12",
+    "pg-boss": ">=12.21.0 <13",
     "zod": "^4.4"
   },
   "devDependencies": {

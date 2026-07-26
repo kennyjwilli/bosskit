@@ -384,7 +384,10 @@ are exported for typing your own helpers around `enqueue`/`defineWorker` — see
 ## Requirements
 
 - Node `>=22.12.0`
-- `pg-boss` `>=12` (peer dependency)
+- `pg-boss` `>=12.21.0 <13` (peer dependency). 12.21.0 is the first release
+  whose type surface this package compiles against (`useListenNotify` in
+  `ConstructorOptions`); the upper bound is deliberate — pg-boss changed its
+  types substantially across 11 → 12, so 13 needs a deliberate look.
 - `zod` `^4.4` (peer dependency)
 - A Postgres database (whatever `pg-boss` itself requires)
 - Zero runtime dependencies otherwise

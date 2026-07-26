@@ -1,5 +1,5 @@
 import { sql as sqlTag } from "drizzle-orm";
-import { fromDrizzle, type PgBoss } from "pg-boss";
+import { type PgBoss, fromDrizzle } from "pg-boss";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { createBoss } from "./boss";

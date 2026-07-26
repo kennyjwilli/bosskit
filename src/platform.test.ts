@@ -40,3 +40,17 @@ describe("createJobPlatform registry validation", () => {
     expect(() => createJobPlatform({ ...PROVIDERS, definitions })).not.toThrow();
   });
 });
+
+describe("schemaFor", () => {
+  it("throws JobPlatformError for a queue that is not in the registry", () => {
+    // A registry whose type has widened to `QueueDefinition[]` — the spelling
+    // that makes every derived name type collapse to `string`, so an unknown
+    // queue name reaches `schemaFor` without a compile error.
+    const definitions: QueueDefinition[] = [{ name: "known", schema: $Payload, options: {} }];
+    const platform = createJobPlatform({ ...PROVIDERS, definitions });
+
+    expect(() => platform.schemaFor("missing")).toThrow(JobPlatformError);
+    expect(() => platform.schemaFor("missing")).toThrow(/Unknown queue "missing"/);
+    expect(() => platform.schemaFor("known")).not.toThrow();
+  });
+});

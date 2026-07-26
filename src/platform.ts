@@ -93,11 +93,20 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
    *
    * The single cast is unavoidable: a runtime lookup can't be correlated to the
    * compile-time payload type. It is sound because the map is built directly
-   * from `definitions`, whose entry for `queue` carries exactly this schema, and
-   * every queue name is present so `.get` never actually returns undefined.
+   * from `definitions`, whose entry for `queue` carries exactly this schema.
+   *
+   * The miss is still checked. On the inferred path every name is present, but
+   * `schemaFor` is exported and a caller whose registry type has widened to
+   * `QueueDefinition[]` can reach it with any string. Without the guard that
+   * surfaces as `Cannot read properties of undefined (reading 'parse')` from
+   * somewhere else entirely.
    */
-  function schemaFor<Q extends Name>(queue: Q) {
-    return schemaByQueue.get(queue) as z.ZodType<Payload<Q>>;
+  function schemaFor<Q extends Name>(queue: Q): z.ZodType<Payload<Q>> {
+    const schema = schemaByQueue.get(queue);
+    if (!schema) {
+      throw new JobPlatformError(`Unknown queue "${queue}"`);
+    }
+    return schema as z.ZodType<Payload<Q>>;
   }
 
   /**

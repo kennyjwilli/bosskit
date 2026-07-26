@@ -8,6 +8,7 @@
   "packageManager": "pnpm@10.29.1",
   "sideEffects": false,
   "files": ["dist", "README.md", "LICENSE"],
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -37,7 +38,7 @@
   },
   "peerDependencies": {
     "pg-boss": ">=12.21.0 <13",
-    "zod": "^4.4"
+    "zod": "^4"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

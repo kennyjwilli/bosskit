@@ -19,9 +19,16 @@ const QUEUES = defineQueues([
     schema: $UserScoped.extend({ to: z.string() }),
     options: { deadLetter: "send-email-dlq", notify: true, retryLimit: 3 },
   },
+  // `global: true` opts a queue out of the user-scoped default — see below.
+  {
+    name: "nightly-cleanup",
+    global: true,
+    schema: z.object({ olderThanDays: z.number() }),
+    options: {},
+  },
 ]);
 
-export const { enqueue, defineWorker, ensureQueues } = createJobPlatform({
+export const { enqueue, defineWorker, ensureQueues, applySchedules } = createJobPlatform({
   definitions: QUEUES,
   getBoss: async () => boss,
   getRuntime: async () => ({ db, mailer }),
@@ -136,8 +143,13 @@ array literal passed straight into `createJobPlatform`, and
 Two spellings destroy them, and both type-check:
 
 ```ts
-const QUEUES: QueueDefinition[] = [...];           // widens
-const QUEUES: readonly QueueDefinition[] = [...];  // also widens
+// Both compile. Both throw the registry's precise types away.
+const widened: QueueDefinition[] = [
+  { name: "send-email", schema: $UserScoped.extend({ to: z.string() }), options: {} },
+];
+const alsoWidened: readonly QueueDefinition[] = [
+  { name: "send-email", schema: $UserScoped.extend({ to: z.string() }), options: {} },
+];
 ```
 
 `readonly` does not save you. When a registry widens you lose two guarantees
@@ -216,17 +228,9 @@ handler has to remember to trace who a job is for.
 ## Schedules
 
 ```ts
-import { defineQueues, type QueueNameOf, type ScheduleDefinition } from "bosskit";
+import type { QueueNameOf, ScheduleDefinition } from "bosskit";
 
-const QUEUES = defineQueues([
-  {
-    name: "nightly-cleanup",
-    global: true,
-    schema: z.object({ olderThanDays: z.number() }),
-    options: {},
-  },
-]);
-
+// QUEUES is the registry from the opening example, which declares nightly-cleanup.
 const schedules: ScheduleDefinition<QueueNameOf<typeof QUEUES>>[] = [
   { queue: "nightly-cleanup", cron: "0 3 * * *", data: { olderThanDays: 30 }, options: { tz: "UTC" } },
 ];
@@ -262,6 +266,13 @@ Annotate `toBossDb`'s parameter. `createJobPlatform` infers the type of every
 `enqueue`'s `db` argument from it, so an unannotated `toBossDb: (handle) =>
 ...` infers `unknown` and `enqueue` will then accept any value as `db` without
 complaint.
+
+One version note if you use drizzle over
+[postgres-js](https://github.com/porsager/postgres): pg-boss's `fromDrizzle`
+only handles postgres-js's bare row-array result from **12.26.3** onward — on
+12.21.0 through 12.26.2 it both rejects the handle at compile time and
+mis-reads the rows at runtime. Other drivers (node-postgres and friends,
+which return `{ rows }`) are fine across the whole supported range.
 
 Pass a transaction handle (not a pooled client) to make job creation atomic
 with your domain writes — see [Transactions](#transactions) below.
@@ -304,11 +315,22 @@ await db.transaction(async (tx) => {
 
 For `tx` to typecheck as `enqueue`'s `db` argument, the type you use for `Db`
 (the parameter type of your `toBossDb` function) must be drizzle's abstract
-`PgDatabase` supertype, not a concrete instantiation like the type
-`drizzle(...)` itself returns — the concrete type carries an extra `$client`
-property that a transaction handle doesn't have, so it rejects `tx`. Typing
-`Db` as the `PgDatabase` supertype is exactly what lets one `enqueue` function
-accept both a pool handle and a transaction handle.
+`PgDatabase` supertype, not the type `drizzle(...)` itself returns — that one
+carries an extra `$client` property a transaction handle doesn't have, so it
+rejects `tx`. With drizzle over postgres-js, the spelling that accepts both a
+pool handle and a transaction handle is:
+
+```ts
+import type { PgDatabase } from "drizzle-orm/pg-core";
+import type { PostgresJsQueryResultHKT } from "drizzle-orm/postgres-js";
+
+type Db = PgDatabase<PostgresJsQueryResultHKT, Record<string, unknown>>;
+```
+
+Both type arguments matter: leaving the schema parameter at its default
+(`Record<string, never>`) rejects a handle created with a schema, and the
+first one names the driver. Swap `PostgresJsQueryResultHKT` for your driver's
+equivalent (`NodePgQueryResultHKT`, and so on).
 
 ## Testing / contributing
 

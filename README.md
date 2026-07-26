@@ -330,7 +330,7 @@ reachable at `TEST_DATABASE_URL` that the test run may freely `CREATE` and
 care about:
 
 ```sh
-docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17
+docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:18
 TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/postgres pnpm test:integration
 ```
 

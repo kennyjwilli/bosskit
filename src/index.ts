@@ -3,7 +3,9 @@
  *
  * Build a platform with `createJobPlatform`, passing a registry declared with
  * `defineQueues` plus providers for the boss, the worker runtime, and a
- * database adapter. The drizzle adapter lives at `bosskit/drizzle`.
+ * database adapter. pg-boss ships the adapters (`fromDrizzle`, `fromKnex`,
+ * `fromKysely`, `fromPrisma`, `fromPglite`); any client that can run one SQL
+ * statement is a few lines away from its own.
  */
 export { createBoss } from "./boss";
 export { JobPlatformError } from "./errors";

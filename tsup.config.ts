@@ -3,7 +3,6 @@ import { defineConfig } from "tsup";
 export default defineConfig({
   entry: {
     index: "src/index.ts",
-    drizzle: "src/adapters/drizzle.ts",
   },
   format: ["esm"],
   dts: true,

@@ -8,7 +8,7 @@ forget who a job is for.
 
 ```ts
 import { createBoss, createJobPlatform, defineQueues, $UserScoped } from "bosskit";
-import { fromDrizzlePostgres } from "bosskit/drizzle";
+import { fromDrizzle } from "pg-boss";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 
@@ -25,7 +25,7 @@ export const { enqueue, defineWorker, ensureQueues } = createJobPlatform({
   definitions: QUEUES,
   getBoss: async () => boss,
   getRuntime: async () => ({ db, mailer }),
-  toBossDb: (handle: Db) => fromDrizzlePostgres(handle, sql),
+  toBossDb: (handle: Db) => fromDrizzle(handle, sql),
   logger: console,
 });
 
@@ -198,25 +198,21 @@ removing an entry from the list is how you turn a schedule off.
 ## Adapters
 
 `enqueue` takes a `db` handle and adapts it to pg-boss's own database contract
-via the `toBossDb` function you pass to `createJobPlatform`. The core package
-has no ORM dependency; adapters are opt-in leaf modules.
-
-### `bosskit/drizzle`
-
-For drizzle + [postgres-js](https://github.com/porsager/postgres):
+via the `toBossDb` function you pass to `createJobPlatform`. bosskit ships no
+adapter of its own and has no ORM dependency — pg-boss already exports one per
+client: `fromDrizzle`, `fromKnex`, `fromKysely`, `fromPrisma` and `fromPglite`.
 
 ```ts
-import { fromDrizzlePostgres } from "bosskit/drizzle";
+import { fromDrizzle } from "pg-boss";
 import { sql } from "drizzle-orm";
 
-toBossDb: (handle: Db) => fromDrizzlePostgres(handle, sql);
+toBossDb: (handle: Db) => fromDrizzle(handle, sql);
 ```
 
-This ships separately from the core because pg-boss's own built-in
-`fromDrizzle` adapter assumes a node-postgres-shaped `{ rows }` result. It
-breaks on postgres-js, whose query result is a bare `RowList` array — reading
-`.rows` off each row of that array returns `undefined`. `fromDrizzlePostgres`
-unwraps the postgres-js result correctly instead.
+Annotate `toBossDb`'s parameter. `createJobPlatform` infers the type of every
+`enqueue`'s `db` argument from it, so an unannotated `toBossDb: (handle) =>
+...` infers `unknown` and `enqueue` will then accept any value as `db` without
+complaint.
 
 Pass a transaction handle (not a pooled client) to make job creation atomic
 with your domain writes — see [Transactions](#transactions) below.
@@ -237,7 +233,8 @@ function fromMyClient(client: { query(text: string, values?: unknown[]): Promise
 }
 ```
 
-Pass the result as `toBossDb` in `createJobPlatform`.
+Pass the result as `toBossDb` in `createJobPlatform`. Give the parameter an
+explicit type, as above — that type becomes `enqueue`'s `db` type.
 
 ## Transactions
 
@@ -360,23 +357,6 @@ can't crash the process. Takes `connectionString`, `migrate`, and `logger`,
 with optional `max`, `applicationName` (defaults to `"bosskit"`), and
 `schema` (defaults to `"pgboss"`). Returns a plain `PgBoss` instance —
 starting, stopping, and caching it is still your responsibility.
-
-### `fromDrizzlePostgres(db, sql)` (`bosskit/drizzle`)
-
-Adapts a drizzle postgres-js handle (pool or transaction) plus its `sql` tag
-into pg-boss's `Db` contract. See [Adapters](#adapters) above.
-
-### `parsePlaceholders(text, values)` (`bosskit/drizzle`)
-
-Parses `$N`-style SQL placeholders out of `text` into literal string segments
-plus the corresponding values in textual order (`{ parts, reordered }`),
-duplicating a value at each occurrence if its placeholder index repeats. It
-re-implements a helper pg-boss keeps as an unexported internal, and is used by
-`fromDrizzlePostgres` to rebuild a tagged-template call for drizzle's `sql`
-function. Exported because anyone writing their own drizzle-flavored adapter
-(see [Writing your own](#writing-your-own)) needs the same parsing and would
-otherwise have to duplicate it — it is not needed for ordinary usage of
-`fromDrizzlePostgres`.
 
 ### `ScheduleDefinition<Name>` / `schedulesToRemove(declared, existing)`
 

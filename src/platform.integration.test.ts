@@ -1,18 +1,17 @@
 import { sql as sqlTag } from "drizzle-orm";
-import type { PgBoss } from "pg-boss";
+import { fromDrizzle, type PgBoss } from "pg-boss";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { fromDrizzlePostgres } from "./adapters/drizzle";
 import { createBoss } from "./boss";
 import { createJobPlatform } from "./platform";
 import { setupTestDb } from "./test/harness";
 import { defineQueues } from "./types";
 
 /**
- * The platform itself, against a synthetic registry — deliberately not this
- * app's queues, so the framework's own tests stay free of any concrete queue.
- * Covers the seam nothing else exercises: register() resolving its providers,
- * then the full round trip enqueue → validate → handler.
+ * The platform itself, against a synthetic registry — deliberately a synthetic
+ * one, so the framework's own tests stay free of any concrete queue. Covers the
+ * seam nothing else exercises: register() resolving its providers, then the
+ * full round trip enqueue → validate → handler.
  */
 
 const $Payload = z.object({ note: z.string(), userId: z.string() });
@@ -51,7 +50,7 @@ describe("createJobPlatform (integration)", () => {
         return { tag: "runtime-value" };
       },
       logger: console,
-      toBossDb: (handle: typeof db) => fromDrizzlePostgres(handle, sqlTag),
+      toBossDb: (handle: typeof db) => fromDrizzle(handle, sqlTag),
     });
 
     await platform.ensureQueues(boss);
@@ -68,7 +67,7 @@ describe("createJobPlatform (integration)", () => {
     // The seam under test: register resolves getBoss/getRuntime itself.
     const workerId = await worker.register(boss);
     expect(workerId).toBeTruthy();
-    // Two registrations, one runtime — the memoization the app's pooling relies on.
+    // Two registrations, one runtime — the memoization a pooled runtime relies on.
     await worker.register(boss);
     expect(runtimeCalls).toBe(1);
 
@@ -94,7 +93,7 @@ describe("createJobPlatform (integration)", () => {
       getBoss: async () => boss,
       getRuntime: async () => ({ tag: "unused" }),
       logger: console,
-      toBossDb: (handle: typeof db) => fromDrizzlePostgres(handle, sqlTag),
+      toBossDb: (handle: typeof db) => fromDrizzle(handle, sqlTag),
     });
 
     await expect(

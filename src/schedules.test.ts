@@ -1,30 +1,30 @@
 import { describe, expect, it } from "vitest";
 import { type ScheduleDefinition, schedulesToRemove } from "./schedules";
 
-const daily: ScheduleDefinition = { cron: "0 3 * * *", queue: "agent-run" };
+const daily: ScheduleDefinition = { cron: "0 3 * * *", queue: "report-export" };
 
 describe("schedulesToRemove", () => {
   it("removes nothing when every existing schedule is declared", () => {
-    const existing = [{ key: null, name: "agent-run" }];
+    const existing = [{ key: null, name: "report-export" }];
     expect(schedulesToRemove([daily], existing)).toEqual([]);
   });
 
   it("ignores key order/representation: '' and null both mean keyless", () => {
     // Real pg-boss rows carry key '' for keyless schedules; a declared keyless
     // schedule must match them so it is not spuriously removed.
-    const existing = [{ key: "", name: "agent-run" }];
+    const existing = [{ key: "", name: "report-export" }];
     expect(schedulesToRemove([daily], existing)).toEqual([]);
   });
 
   it("removes undeclared schedules, distinguishing keyed from keyless", () => {
     const existing = [
-      { key: null, name: "agent-run" }, // declared → kept
-      { key: "", name: "agent-run-dlq" }, // undeclared, keyless → { name }
-      { key: "eu", name: "agent-run-dlq" }, // undeclared, keyed → { name, key }
+      { key: null, name: "report-export" }, // declared → kept
+      { key: "", name: "report-export-dlq" }, // undeclared, keyless → { name }
+      { key: "eu", name: "report-export-dlq" }, // undeclared, keyed → { name, key }
     ];
     expect(schedulesToRemove([daily], existing)).toEqual([
-      { name: "agent-run-dlq" },
-      { key: "eu", name: "agent-run-dlq" },
+      { name: "report-export-dlq" },
+      { key: "eu", name: "report-export-dlq" },
     ]);
   });
 
@@ -32,19 +32,19 @@ describe("schedulesToRemove", () => {
     const us: ScheduleDefinition = {
       cron: "0 6 * * *",
       options: { key: "us" },
-      queue: "agent-run-dlq",
+      queue: "report-export-dlq",
     };
     const eu: ScheduleDefinition = {
       cron: "0 18 * * *",
       options: { key: "eu" },
-      queue: "agent-run-dlq",
+      queue: "report-export-dlq",
     };
     // 'us' is declared, 'eu' is not → only 'eu' is removed.
     const existing = [
-      { key: "us", name: "agent-run-dlq" },
-      { key: "eu", name: "agent-run-dlq" },
+      { key: "us", name: "report-export-dlq" },
+      { key: "eu", name: "report-export-dlq" },
     ];
-    expect(schedulesToRemove([us], existing)).toEqual([{ key: "eu", name: "agent-run-dlq" }]);
+    expect(schedulesToRemove([us], existing)).toEqual([{ key: "eu", name: "report-export-dlq" }]);
     // Both declared → nothing removed.
     expect(schedulesToRemove([us, eu], existing)).toEqual([]);
   });

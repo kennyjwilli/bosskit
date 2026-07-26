@@ -7,8 +7,8 @@ describe("user-scoped queue definitions", () => {
   // Compile-time guarantees. These are type assertions, not runtime checks:
   // each @ts-expect-error FAILS THE BUILD if the line ever starts compiling,
   // which is exactly the regression we want to catch. Written against synthetic
-  // definitions, never the app's registry, so they pin the constraint itself
-  // and keep the framework's tests free of any concrete queue.
+  // definitions, never a real registry, so they pin the constraint itself and
+  // keep this package's tests free of any concrete queue.
   it("requires an acting user unless a queue opts out with global", () => {
     // A queue with no `global` flag must carry a user in its payload.
     const userScoped: QueueDefinition = {

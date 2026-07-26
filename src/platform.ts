@@ -16,31 +16,36 @@ import {
 /**
  * Build a job platform bound to one queue registry.
  *
- * This is the framework's only entry point, and the reason `src/lib/jobs/`
- * knows nothing about this application. Everything app-shaped arrives through
- * arguments:
+ * This is the package's only entry point, and the reason nothing inside it
+ * knows about the application using it. Everything application-shaped arrives
+ * through arguments:
  *
  * - `definitions` — the queue registry. Both the compile-time payload types and
- *   the runtime boundary validation derive from it, so the app declares each
- *   queue exactly once.
+ *   the runtime boundary validation derive from it, so you declare each queue
+ *   exactly once.
  * - `getBoss` — resolves a *started* pg-boss instance. A provider rather than an
- *   instance because the boss is not started at module-evaluation time; the app
- *   owns creation, caching and config.
- * - `getRuntime` — resolves whatever context handlers should receive (this app
- *   passes `{ db, config }`). Its return type `R` is INFERRED, which is how the
- *   framework types handler context without importing the app's `Db`/`Config`.
- *   May be called once per worker registration, so it must be cheap and
- *   idempotent; the platform memoizes it (see below).
- * - `toBossDb` — adapts the app's database handle to pg-boss's `executeSql`
+ *   instance because the boss is not started at module-evaluation time; you own
+ *   its creation, caching and config.
+ * - `getRuntime` — resolves whatever context handlers should receive (say,
+ *   `{ db, config }`). Its return type `R` is INFERRED, which is how handler
+ *   context gets typed without this package importing your `Db`/`Config`.
+ *   Resolved AT MOST ONCE for the life of the platform (see below), so anything
+ *   computed per call — a fresh request id, a timestamp — would be frozen at
+ *   the first value. Return a plain data object: handlers receive it via the
+ *   shallow spread `{ ...runtime, jobs }`, which drops a class instance's
+ *   prototype and with it every method on it.
+ * - `toBossDb` — adapts your database handle to pg-boss's `executeSql`
  *   contract. Its parameter type `TDb` is INFERRED and becomes the `db` every
- *   enqueue takes, so the core needs no ORM: pass `fromDrizzlePostgres` (shipped
- *   as an opt-in leaf module) or write three lines for any other client.
- * - `logger` — the platform never reaches for an app logger.
+ *   enqueue takes, so this package needs no ORM: pass one of pg-boss's own
+ *   adapters (`fromDrizzle`, `fromKnex`, `fromKysely`, `fromPrisma`,
+ *   `fromPglite`) or write three lines for any other client. ANNOTATE the
+ *   parameter — written as `(db) => ...` it infers `unknown`, and `enqueue`
+ *   then accepts any value at all as its `db`.
+ * - `logger` — the platform never reaches for a global logger.
  *
- * All three type parameters are inferred from the call, so the app never writes
- * an explicit type argument. `const D` preserves the literal registry tuple,
- * which is what keeps `QueuePayloadOf` precise (see the note on
- * `QueueDefinition`).
+ * All three type parameters are inferred from the call, so you never write an
+ * explicit type argument. `const D` preserves the literal registry tuple, which
+ * is what keeps `QueuePayloadOf` precise (see the note on `QueueDefinition`).
  */
 export function createJobPlatform<const D extends readonly QueueDefinition[], R, TDb>(platform: {
   definitions: D;
@@ -52,10 +57,11 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
   const { definitions, getBoss, getRuntime, logger, toBossDb } = platform;
 
   /**
-   * Resolve the runtime at most once. `register` runs per worker, and a
-   * provider that allocated a connection pool per call would quietly open one
-   * per worker. Cleared on rejection so a transient failure at boot doesn't
-   * poison a later retry — `startJobs` clears its own memo for the same reason.
+   * Resolve the runtime at most once, lazily, on the first worker registration.
+   * `register` runs per worker, and a provider that allocated a connection pool
+   * per call would quietly open one per worker. The memo is cleared only when
+   * the promise rejects, so a transient failure at boot doesn't poison a later
+   * retry; a successful resolution is kept for the life of the platform.
    */
   let runtimePromise: Promise<R> | undefined;
   function resolveRuntime(): Promise<R> {
@@ -160,9 +166,11 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
   }
 
   /**
-   * Define a worker for a queue. The handler receives the app runtime (`R`,
-   * inferred from `getRuntime`) plus the validated, typed jobs — so handlers
-   * never open a database connection or parse payloads themselves.
+   * Define a worker for a queue. The handler receives the resolved runtime
+   * (`R`, inferred from `getRuntime`) spread alongside the validated, typed
+   * jobs — so handlers never open a database connection or parse payloads
+   * themselves. The spread is shallow: a runtime that is a class instance
+   * arrives without its prototype, so keep it plain data.
    *
    * Each job's payload is parsed through the queue's schema at this boundary and
    * the handler receives the PARSED jobs, so coercions and defaults declared in

@@ -2,10 +2,10 @@ import type { PgBoss } from "pg-boss";
 import { z } from "zod";
 
 /**
- * Generic job-platform types. This module — and everything else in
- * `src/lib/jobs/` — knows nothing about this application: no concrete queue, no
- * app config, no app database type. The concrete instance is built by calling
- * `createJobPlatform` with a queue registry and providers — see the README.
+ * Generic job-platform types. Nothing in this package knows anything about the
+ * application using it: no concrete queue, no configuration shape, no database
+ * type. A concrete instance is built by calling `createJobPlatform` with a
+ * queue registry and providers — see the README.
  */
 
 /** The minimal logging surface the platform needs; a pino logger satisfies it. */
@@ -16,10 +16,10 @@ export type JobLogger = {
 };
 
 /**
- * The acting user a job runs on behalf of — the Clerk user whose credentials
- * the worker derives (BYOT) and whose identity every job log line carries.
- * A user-scoped queue's payload extends this; see `QueueDefinition` for the
- * `global` opt-out used by system jobs that have no user.
+ * The acting user a job runs on behalf of — the identity a worker resolves
+ * credentials, tenancy or permissions from, and the one every job log line
+ * carries. A user-scoped queue's payload extends this; see `QueueDefinition`
+ * for the `global` opt-out used by system jobs that have no user.
  *
  * This lives in the payload (not pg-boss job metadata) because `data` is the
  * only user-controlled channel pg-boss offers — and because the DLQ hop copies
@@ -46,13 +46,19 @@ type QueueDefinitionBase = {
  * (`QueuePayloadOf`), the constraint also makes it a compile error to enqueue
  * without a user, or to drop the user across a chain hop.
  *
- * IMPORTANT: declare a registry with `defineQueues`, not a plain type
- * annotation. `defineQueues`'s `const` type parameter checks each entry
- * against this constraint WITHOUT widening the stored schema types, which is
- * what keeps the derived payload types precise. A plain annotation
- * (`const QUEUE_DEFINITIONS: QueueDefinition[] = [...]`) would silently
- * collapse every payload type to `UserScoped` and stop `enqueue` from
- * type-checking domain fields at all.
+ * IMPORTANT: never store a registry in a variable annotated `QueueDefinition[]`
+ * or `readonly QueueDefinition[]`. Both spellings widen it, and widening costs
+ * two guarantees at once, silently:
+ *
+ * - `QueuePayloadOf` collapses to this type's base user-scoped shape, so
+ *   `enqueue` stops type-checking domain fields entirely.
+ * - `SendableOf` collapses to `string`, so the dead-letter exclusion disappears
+ *   and any queue name — including one that does not exist — compiles.
+ *
+ * Three spellings keep it precise: `defineQueues([...])`, an array literal
+ * passed straight into `createJobPlatform`, and `[...] satisfies
+ * QueueDefinition[]`. Prefer `defineQueues` — it checks each entry against this
+ * constraint without widening what it stores.
  */
 export type QueueDefinition =
   | (QueueDefinitionBase & {
@@ -133,11 +139,13 @@ export type RegisteredWorker = {
  *
  * The `const` type parameter preserves the literal tuple, so every derived type
  * (`QueueNameOf`, `QueuePayloadOf`, `SendableOf`) stays precise. This is the
- * only supported way to build a registry: the alternative spelling
- * `const QUEUES: QueueDefinition[] = [...]` type-checks but silently widens
- * every payload to `UserScoped`, which disables the domain-field checking that
- * `enqueue` exists to provide. Calling a function instead of writing a type
- * annotation makes that mistake unspellable.
+ * recommended way to build a registry: the alternative spellings
+ * `const QUEUES: QueueDefinition[] = [...]` and
+ * `const QUEUES: readonly QueueDefinition[] = [...]` both type-check but widen,
+ * which collapses every payload to `UserScoped` AND collapses the enqueue-able
+ * name set to `string` — so domain fields stop being checked and the
+ * dead-letter guard quietly stops guarding. Calling a function instead of
+ * writing a type annotation makes that mistake unspellable.
  */
 export function defineQueues<const D extends readonly QueueDefinition[]>(defs: D): D {
   return defs;

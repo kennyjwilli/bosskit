@@ -104,11 +104,10 @@ defineQueues([
 ]);
 ```
 
-`userId` lives in the job **payload**, not in pg-boss job metadata, for a
-specific reason: `data` is the only user-controlled channel pg-boss offers,
-and pg-boss's dead-letter hop copies `data` verbatim into the DLQ row. Putting
-the acting user in the payload means it survives into dead-letter queues for
-free — no separate plumbing needed to know who a failed job was running for.
+`userId` lives in the job **payload**, not in pg-boss job metadata: put the
+acting user in the schema and it travels with the job automatically — it's
+still there on the row if the job ends up in a dead-letter queue, with no
+separate plumbing needed to know who a failed job was running for.
 
 ## `defineQueues`
 
@@ -121,16 +120,9 @@ const QUEUES = defineQueues([
 ]);
 ```
 
-`defineQueues`'s type parameter is declared `const D extends readonly
-QueueDefinition[]`. The `const` modifier preserves the literal registry tuple
-— each entry's exact `name` string and exact `schema` type — rather than
-widening it to `QueueDefinition[]`. That literal tuple is what every derived
-type (`QueueNameOf`, `QueuePayloadOf`, `SendableOf`) is computed from, so it's
-what keeps `enqueue` and worker handlers precisely typed per queue.
-
-Because the function itself does the `const` binding, there's no
-`as const satisfies QueueDefinition[]` incantation to remember at the call
-site.
+This is what keeps `enqueue` and worker handlers precisely typed per queue —
+and it means there's no `as const satisfies QueueDefinition[]` incantation to
+remember at the call site.
 
 ### The widening trap
 
@@ -150,15 +142,10 @@ const alsoWidened: readonly QueueDefinition[] = [
 ];
 ```
 
-`readonly` does not save you. When a registry widens you lose two guarantees
-at once, with no diagnostic anywhere:
-
-- `QueuePayloadOf` collapses to the base user-scoped shape (`{ userId: string
-  }`), so `enqueue` stops type-checking domain fields — the entire point of
-  declaring a schema per queue.
-- `SendableOf` collapses to `string`, so the dead-letter guard silently
-  disappears and `enqueue({ queue: "a-queue-that-does-not-exist", ... })`
-  compiles too.
+`readonly` does not save you. The symptom: `enqueue` stops catching wrong
+payloads — every queue's payload collapses to the base `{ userId: string }`
+shape — and stops rejecting dead-letter queue names, so
+`enqueue({ queue: "a-queue-that-does-not-exist", ... })` compiles too.
 
 If `enqueue` has stopped complaining about a payload you know is wrong, this
 is why.
@@ -208,16 +195,16 @@ handler sees them (a `z.coerce.date()` field arrives as a `Date`, not the
 string jsonb gave back). A handler never opens its own connection or parses a
 payload.
 
-Payload schemas should stay JSON-round-trippable: `enqueue` types `data` as
-the schema's output but feeds it to `.parse()` as input, so a non-idempotent
-`.transform()` will not survive the round trip.
+Keep payload schemas JSON-round-trippable, and avoid `.transform()` on them —
+a job's payload is written as JSON and read back as JSON, so a schema whose
+parsed shape can't survive that round trip will fail validation on the way
+back out.
 
-Validation happens per **batch**, not per job. If any payload in a batch fails
-to parse, the whole batch throws, so it fails and retries/dead-letters like
-any other handler error — including the healthy jobs that happened to be
-fetched alongside the bad one. With the default `batchSize` of 1 that
-distinction doesn't arise; with a larger one, a single poison payload can drag
-its batch-mates to the dead-letter queue with it.
+Validation happens per **batch**, not per job: a payload that fails to parse
+fails the whole batch, so the healthy jobs fetched alongside it retry and can
+dead-letter along with it. This doesn't come up at the default `batchSize` of
+1; with a larger `batchSize`, one bad payload can drag its batch-mates down
+with it.
 
 Every job is logged before the handler runs, with its queue, job id, retry
 count, and the acting `userId` (when the queue is user-scoped) — so no
@@ -260,10 +247,9 @@ import { sql } from "drizzle-orm";
 toBossDb: (handle: Db) => fromDrizzle(handle, sql);
 ```
 
-Annotate `toBossDb`'s parameter. `createJobPlatform` infers the type of every
-`enqueue`'s `db` argument from it, so an unannotated `toBossDb: (handle) =>
-...` infers `unknown` and `enqueue` will then accept any value as `db` without
-complaint.
+Annotate `toBossDb`'s parameter — that type becomes `enqueue`'s `db` type.
+Left unannotated (`toBossDb: (handle) => ...`), `enqueue` will accept any
+value as `db` without complaint.
 
 One version note if you use drizzle over
 [postgres-js](https://github.com/porsager/postgres): pg-boss's `fromDrizzle`
@@ -313,10 +299,9 @@ await db.transaction(async (tx) => {
 
 For `tx` to typecheck as `enqueue`'s `db` argument, the type you use for `Db`
 (the parameter type of your `toBossDb` function) must be drizzle's abstract
-`PgDatabase` supertype, not the type `drizzle(...)` itself returns — that one
-carries an extra `$client` property a transaction handle doesn't have, so it
-rejects `tx`. With drizzle over postgres-js, the spelling that accepts both a
-pool handle and a transaction handle is:
+`PgDatabase` supertype, not the type `drizzle(...)` itself returns — the
+concrete type rejects a transaction handle. With drizzle over postgres-js, the
+spelling that accepts both a pool handle and a transaction handle is:
 
 ```ts
 import type { PgDatabase } from "drizzle-orm/pg-core";
@@ -363,12 +348,9 @@ pnpm test:integration
 pnpm build
 ```
 
-`pnpm prepublishOnly` runs `check`, `typecheck`, `test`, and `build` — the
-same steps CI runs, minus `test:integration`. That omission is deliberate:
-cutting a release shouldn't require a disposable Postgres container on hand,
-and by the time a release is cut, CI has already run the full suite —
-including integration tests — against the commit being published. Integration
-coverage lives in CI, not in the publish gate.
+`pnpm prepublishOnly` runs `check`, `typecheck`, `test`, and `build` before
+every release; `test:integration` is deliberately not part of it, so cutting a
+release doesn't require a disposable Postgres container on hand.
 
 ## API reference
 
@@ -380,19 +362,14 @@ The framework's entry point. Takes `definitions` (a registry from
 `toBossDb` (adapts your database handle to pg-boss's `Db` contract), and
 `logger`.
 
-Two things about the providers are easy to get wrong:
+Two rules to follow when writing the providers:
 
-- **`toBossDb`'s parameter must be annotated.** `createJobPlatform` infers
-  `TDb` — the type of every `enqueue`'s `db` argument — from it. Written
-  unannotated (`toBossDb: (db) => fromDrizzle(db, sql)`), `TDb` falls back to
-  `unknown` and `enqueue` will then accept literally any value as `db`,
-  silently.
-- **`getRuntime` resolves at most once.** It is memoized lazily on the first
-  worker registration and re-run only if it rejected, so a value computed per
-  call — a fresh request id, a `Date.now()` — is frozen at whatever the first
-  call produced. The runtime also reaches handlers through the shallow spread
-  `{ ...runtime, jobs }`, which drops the prototype: return plain data, not a
-  class instance, or the handler gets an object with none of its methods.
+- **Annotate `toBossDb`'s parameter.** That type becomes `enqueue`'s `db`
+  type. Written unannotated (`toBossDb: (db) => fromDrizzle(db, sql)`),
+  `enqueue` will accept literally any value as `db`, silently.
+- **`getRuntime` runs once.** Don't compute per-call values in it (a fresh
+  request id, `Date.now()`) — whatever it returns is what every handler gets
+  for the life of the platform. Return plain data, not a class instance.
 
 Returns `{ enqueue, enqueueWith, cancelJobs, defineWorker, ensureQueues,
 applySchedules, schemaFor }` bound to that registry:
@@ -403,10 +380,9 @@ applySchedules, schemaFor }` bound to that registry:
   flight, for instance). `null` is a normal outcome, not an error — check for
   it before treating the return value as an id.
 - **`enqueueWith(boss, args)`** — the same as `enqueue`, but takes an explicit
-  `PgBoss` instance instead of resolving one through `getBoss`. `enqueue` is
-  just `enqueueWith` bound to `getBoss()`; the explicit-instance form exists
-  so tests can pass a boss they control directly, without wiring a `getBoss`
-  provider around it.
+  `PgBoss` instance instead of resolving one through `getBoss`. Use it when
+  you already have a boss instance in hand — most usefully in tests, where it
+  avoids wiring a `getBoss` provider around the instance you already control.
 - **`cancelJobs(queue, jobIds)`** — best-effort cancellation by id (e.g. when
   the domain record a job represents gets cancelled). Already-settled ids are
   a no-op. Cancelling stops a queued job from starting and prevents a retry of
@@ -422,13 +398,10 @@ applySchedules, schemaFor }` bound to that registry:
   reset it on an already-created queue — that needs a fresh queue or manual
   intervention. Call it on boot, before enqueuing to or working any queue.
 - **`applySchedules`** — see [Schedules](#schedules).
-- **`schemaFor(queue)`** — looks up a queue's payload schema at runtime, typed
-  so `.parse()` returns that queue's payload. This is what `enqueue` and
-  worker validation use internally to validate at both boundaries; exposed so
-  application code can validate or parse a payload against the same schema
-  outside those paths. Throws `JobPlatformError` for a name that is not in the
-  registry — reachable when the registry type has widened, since the name type
-  is then just `string`.
+- **`schemaFor(queue)`** — returns the queue's payload schema, typed so
+  `.parse()` returns that queue's payload. Use it to validate or parse a
+  payload yourself outside of `enqueue` or a worker handler. Throws
+  `JobPlatformError` for a name that is not in the registry.
 
 ### `defineQueues(definitions)`
 
@@ -456,33 +429,43 @@ starting, stopping, and caching it is still your responsibility.
 ### `ScheduleDefinition<Name>` / `schedulesToRemove(declared, existing)`
 
 `ScheduleDefinition` is the shape passed to `applySchedules`: `{ queue, cron,
-data?, options? }`. `schedulesToRemove` is the pure diff `applySchedules` uses
-internally — given a declared list and pg-boss's existing schedules, it
-returns the ones no longer declared. Exported mainly for testing; application
-code normally only calls `applySchedules`.
+data?, options? }`. `schedulesToRemove(declared, existing)` takes your
+declared schedule list and pg-boss's existing schedules (from
+`boss.getSchedules()`) and returns the ones that are no longer declared and
+would be turned off — useful for previewing what a call to `applySchedules`
+would unschedule before you actually run it. Application code normally only
+calls `applySchedules`, which does this diff for you.
 
 ### `JobPlatformError`
 
 Thrown by `createJobPlatform` itself when the registry is misconfigured (for
 example, the same queue name declared twice) — a `JobPlatformError` means a
-programming mistake in the registry, never a failed job. A plain `Error`
-subclass, so `instanceof JobPlatformError` works without any application
-error framework.
+programming mistake in the registry, never a failed job. Standard `Error`
+subclass: catch it with `instanceof JobPlatformError`.
 
 ### Types
 
-`JobLogger`, `JobOptions`, `QueueDefinition`, `QueueNameOf<D>`,
-`QueuePayloadOf<D, Q>`, `SendableOf<D>`, `RegisteredWorker`, and `UserScoped`
-are exported for typing your own helpers around `enqueue`/`defineWorker` — see
-`src/types.ts` for the exact shapes.
+Exported for typing your own helpers around `enqueue`/`defineWorker`:
+
+- **`JobLogger`** — the logging interface `createJobPlatform` expects;
+  satisfied by a pino logger or `console`.
+- **`JobOptions`** — the options `enqueue` accepts alongside `data` (pg-boss's
+  own send options, minus `db`, which the platform supplies for you).
+- **`QueueDefinition`** — one entry in a registry: `{ name, schema, global?,
+  options? }`.
+- **`QueueNameOf<D>`** — every queue name in a registry `D`, including
+  dead-letter targets.
+- **`QueuePayloadOf<D, Q>`** — the payload type for queue `Q` in registry `D`.
+- **`SendableOf<D>`** — the queue names `enqueue` accepts, with dead-letter
+  targets excluded; see [Dead-letter queues](#dead-letter-queues).
+- **`RegisteredWorker`** — the type `defineWorker` returns.
+- **`UserScoped`** — `{ userId: string }`, the inferred type of
+  `UserScopedSchema`.
 
 ## Requirements
 
 - Node `>=22.12.0`
-- `pg-boss` `>=12.21.0 <13` (peer dependency). 12.21.0 is the first release
-  whose type surface this package compiles against (`useListenNotify` in
-  `ConstructorOptions`); the upper bound is deliberate — pg-boss changed its
-  types substantially across 11 → 12, so 13 needs a deliberate look.
+- `pg-boss` `>=12.21.0 <13` (peer dependency)
 - `zod` `^4` (peer dependency)
 - A Postgres database (whatever `pg-boss` itself requires)
 - Zero runtime dependencies otherwise

@@ -46,10 +46,10 @@ type QueueDefinitionBase = {
  * (`QueuePayloadOf`), the constraint also makes it a compile error to enqueue
  * without a user, or to drop the user across a chain hop.
  *
- * IMPORTANT: a registry must be declared `as const satisfies readonly
- * QueueDefinition[]`. `satisfies` checks each entry against this constraint
- * WITHOUT widening the stored schema types, which is what keeps the derived
- * payload types precise. A plain type annotation
+ * IMPORTANT: declare a registry with `defineQueues`, not a plain type
+ * annotation. `defineQueues`'s `const` type parameter checks each entry
+ * against this constraint WITHOUT widening the stored schema types, which is
+ * what keeps the derived payload types precise. A plain annotation
  * (`const QUEUE_DEFINITIONS: QueueDefinition[] = [...]`) would silently
  * collapse every payload type to `UserScoped` and stop `enqueue` from
  * type-checking domain fields at all.

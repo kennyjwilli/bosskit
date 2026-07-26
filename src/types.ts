@@ -1,0 +1,144 @@
+import type { PgBoss } from "pg-boss";
+import { z } from "zod";
+
+/**
+ * Generic job-platform types. This module — and everything else in
+ * `src/lib/jobs/` — knows nothing about this application: no concrete queue, no
+ * app config, no app database type. The concrete instance is built by calling
+ * `createJobPlatform` with a queue registry and providers — see the README.
+ */
+
+/** The minimal logging surface the platform needs; a pino logger satisfies it. */
+export type JobLogger = {
+  info(obj: Record<string, unknown>, msg: string): void;
+  warn(obj: Record<string, unknown>, msg: string): void;
+  error(obj: Record<string, unknown>, msg: string): void;
+};
+
+/**
+ * The acting user a job runs on behalf of — the Clerk user whose credentials
+ * the worker derives (BYOT) and whose identity every job log line carries.
+ * A user-scoped queue's payload extends this; see `QueueDefinition` for the
+ * `global` opt-out used by system jobs that have no user.
+ *
+ * This lives in the payload (not pg-boss job metadata) because `data` is the
+ * only user-controlled channel pg-boss offers — and because the DLQ hop copies
+ * `data` verbatim, the acting user survives into dead-letter queues for free.
+ */
+export const $UserScoped = z.object({ userId: z.string() });
+export type UserScoped = z.infer<typeof $UserScoped>;
+
+type QueueOptions = NonNullable<Parameters<PgBoss["createQueue"]>[1]>;
+
+type QueueDefinitionBase = {
+  name: string;
+  options: Omit<QueueOptions, "name">;
+};
+
+/**
+ * A queue definition. By DEFAULT a queue is user-scoped: its payload schema
+ * must produce a `userId`, so forgetting the acting user on a new queue is a
+ * compile error rather than a runtime surprise discovered in a worker. System
+ * work that genuinely has no user on whose behalf it runs — cron sweeps,
+ * maintenance jobs — opts out explicitly with `global: true`.
+ *
+ * Because `enqueue`'s `data` parameter is derived from this schema
+ * (`QueuePayloadOf`), the constraint also makes it a compile error to enqueue
+ * without a user, or to drop the user across a chain hop.
+ *
+ * IMPORTANT: a registry must be declared `as const satisfies readonly
+ * QueueDefinition[]`. `satisfies` checks each entry against this constraint
+ * WITHOUT widening the stored schema types, which is what keeps the derived
+ * payload types precise. A plain type annotation
+ * (`const QUEUE_DEFINITIONS: QueueDefinition[] = [...]`) would silently
+ * collapse every payload type to `UserScoped` and stop `enqueue` from
+ * type-checking domain fields at all.
+ */
+export type QueueDefinition =
+  | (QueueDefinitionBase & {
+      global?: false;
+      /** Zod schema for this queue's job payload — the single source of truth
+       * for both the compile-time payload type and the runtime boundary
+       * validation. Must carry the acting user (see `$UserScoped`). */
+      schema: z.ZodType<UserScoped>;
+    })
+  | (QueueDefinitionBase & {
+      /** This queue's jobs run on behalf of no one — system work only. */
+      global: true;
+      /** Zod schema for this queue's job payload — the single source of truth
+       * for both the compile-time payload type and the runtime boundary
+       * validation. `object` because a pg-boss payload is always JSON. */
+      schema: z.ZodType<object>;
+    });
+
+/** Every queue name in a registry. Broader than `SendableOf`: includes DLQs. */
+export type QueueNameOf<D extends readonly QueueDefinition[]> = D[number]["name"];
+
+/**
+ * Payload type per queue, inferred from each declared Zod schema — the derived
+ * contract for `enqueue` and worker handlers, with no hand-written map to keep
+ * in sync. Modelled as an indexed access (not `Extract` + `z.infer`) so it
+ * resolves to a concrete object type for a generic `Q`, e.g. inside `enqueue`.
+ */
+type QueuePayloadMapOf<D extends readonly QueueDefinition[]> = {
+  [E in D[number] as E["name"]]: z.infer<E["schema"]>;
+};
+/**
+ * The `& object` states what is already true — a pg-boss payload is JSON — and
+ * is applied here rather than inside the map on purpose: with both `D` and `Q`
+ * generic the map lookup stays deferred, so only an intersection at this level
+ * keeps a payload provably assignable to `boss.send`'s `object` parameter.
+ */
+export type QueuePayloadOf<
+  D extends readonly QueueDefinition[],
+  Q extends QueueNameOf<D>,
+> = QueuePayloadMapOf<D>[Q] & object;
+
+/**
+ * Every dead-letter target named by some queue's `deadLetter` option. You never
+ * enqueue to a DLQ (pg-boss copies failed jobs into it automatically), so these
+ * are excluded from the enqueue-able set below.
+ */
+type DeadLetterOf<D extends readonly QueueDefinition[]> = Extract<
+  D[number]["options"],
+  { deadLetter: string }
+>["deadLetter"];
+
+/**
+ * The queues application code may enqueue to: every defined queue minus the
+ * dead-letter targets. Derived, so declaring a new DLQ automatically keeps it
+ * off the enqueue surface.
+ */
+export type SendableOf<D extends readonly QueueDefinition[]> = Exclude<
+  QueueNameOf<D>,
+  DeadLetterOf<D>
+>;
+
+type SendOptionsOf = NonNullable<Parameters<PgBoss["send"]>[2]>;
+/** pg-boss send options, minus `db` — the platform owns db threading. */
+export type JobOptions = Omit<SendOptionsOf, "db">;
+
+/**
+ * A worker registered against a queue, type-erased for storage in a worker
+ * list. `defineWorker` binds the queue → payload → handler types; `register`
+ * closes over them so a heterogeneous worker list needs no shared handler type.
+ */
+export type RegisteredWorker = {
+  queue: string;
+  register: (boss: PgBoss) => Promise<string>;
+};
+
+/**
+ * Declare a queue registry.
+ *
+ * The `const` type parameter preserves the literal tuple, so every derived type
+ * (`QueueNameOf`, `QueuePayloadOf`, `SendableOf`) stays precise. This is the
+ * only supported way to build a registry: the alternative spelling
+ * `const QUEUES: QueueDefinition[] = [...]` type-checks but silently widens
+ * every payload to `UserScoped`, which disables the domain-field checking that
+ * `enqueue` exists to provide. Calling a function instead of writing a type
+ * annotation makes that mistake unspellable.
+ */
+export function defineQueues<const D extends readonly QueueDefinition[]>(defs: D): D {
+  return defs;
+}

@@ -1,0 +1,51 @@
+{
+  "name": "bosskit",
+  "version": "0.1.0",
+  "description": "Type-safe, user-scoped job queues for pg-boss, powered by Zod.",
+  "license": "MIT",
+  "author": "Kenny Williams",
+  "type": "module",
+  "sideEffects": false,
+  "files": ["dist", "README.md", "LICENSE"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./drizzle": {
+      "types": "./dist/drizzle.d.ts",
+      "import": "./dist/drizzle.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "biome check .",
+    "check:fix": "biome check --write .",
+    "prepublishOnly": "pnpm check && pnpm typecheck && pnpm test && pnpm build"
+  },
+  "homepage": "https://github.com/kennyjwilli/bosskit#readme",
+  "bugs": { "url": "https://github.com/kennyjwilli/bosskit/issues" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kennyjwilli/bosskit.git"
+  },
+  "engines": { "node": ">=22.12.0" },
+  "peerDependencies": {
+    "pg-boss": ">=12",
+    "zod": "^4.4"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/node": "^22.20.1",
+    "pg-boss": "^12.26.3",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9",
+    "zod": "^4.4.3"
+  },
+  "keywords": ["pg-boss", "postgres", "jobs", "queue", "worker", "zod", "type-safe", "multi-tenant"]
+}

@@ -28,12 +28,16 @@
     "prepublishOnly": "pnpm check && pnpm typecheck && pnpm test && pnpm build"
   },
   "homepage": "https://github.com/kennyjwilli/bosskit#readme",
-  "bugs": { "url": "https://github.com/kennyjwilli/bosskit/issues" },
+  "bugs": {
+    "url": "https://github.com/kennyjwilli/bosskit/issues"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kennyjwilli/bosskit.git"
   },
-  "engines": { "node": ">=22.12.0" },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "peerDependencies": {
     "pg-boss": ">=12",
     "zod": "^4.4"
@@ -41,7 +45,9 @@
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@types/node": "^22.20.1",
+    "drizzle-orm": "^0.45.2",
     "pg-boss": "^12.26.3",
+    "postgres": "^3.4.9",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
     "vitest": "^2.1.9",

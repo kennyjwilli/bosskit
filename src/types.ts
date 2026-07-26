@@ -25,8 +25,8 @@ export type JobLogger = {
  * only user-controlled channel pg-boss offers — and because the DLQ hop copies
  * `data` verbatim, the acting user survives into dead-letter queues for free.
  */
-export const $UserScoped = z.object({ userId: z.string() });
-export type UserScoped = z.infer<typeof $UserScoped>;
+export const UserScopedSchema = z.object({ userId: z.string() });
+export type UserScoped = z.infer<typeof UserScopedSchema>;
 
 type QueueOptions = NonNullable<Parameters<PgBoss["createQueue"]>[1]>;
 
@@ -65,7 +65,7 @@ export type QueueDefinition =
       global?: false;
       /** Zod schema for this queue's job payload — the single source of truth
        * for both the compile-time payload type and the runtime boundary
-       * validation. Must carry the acting user (see `$UserScoped`). */
+       * validation. Must carry the acting user (see `UserScopedSchema`). */
       schema: z.ZodType<UserScoped>;
     })
   | (QueueDefinitionBase & {

@@ -3,7 +3,6 @@ import type { z } from "zod";
 import { JobPlatformError } from "./errors";
 import { type ScheduleDefinition, schedulesToRemove } from "./schedules";
 import {
-  $UserScoped,
   type JobLogger,
   type JobOptions,
   type QueueDefinition,
@@ -11,6 +10,7 @@ import {
   type QueuePayloadOf,
   type RegisteredWorker,
   type SendableOf,
+  UserScopedSchema,
 } from "./types";
 
 /**
@@ -209,7 +209,7 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
               const data = schema.parse(job.data);
               // Uniform actor trace for every queue. safeParse (not a cast) so
               // this also works for `global` queues, whose payloads carry no user.
-              const actor = $UserScoped.safeParse(data);
+              const actor = UserScopedSchema.safeParse(data);
               logger.info(
                 {
                   jobId: job.id,

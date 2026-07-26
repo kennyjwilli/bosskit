@@ -12,7 +12,6 @@ export { JobPlatformError } from "./errors";
 export { createJobPlatform } from "./platform";
 export { type ScheduleDefinition, schedulesToRemove } from "./schedules";
 export {
-  $UserScoped,
   defineQueues,
   type JobLogger,
   type JobOptions,
@@ -22,4 +21,5 @@ export {
   type RegisteredWorker,
   type SendableOf,
   type UserScoped,
+  UserScopedSchema,
 } from "./types";

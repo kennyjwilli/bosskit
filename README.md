@@ -7,16 +7,16 @@ handlers, runtime validation at both boundaries, and a compile error if you
 forget who a job is for.
 
 ```ts
-import { createBoss, createJobPlatform, defineQueues, $UserScoped } from "bosskit";
+import { createBoss, createJobPlatform, defineQueues, UserScopedSchema } from "bosskit";
 import { fromDrizzle } from "pg-boss";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 
 const QUEUES = defineQueues([
-  { name: "send-email-dlq", schema: $UserScoped.extend({ to: z.string() }), options: {} },
+  { name: "send-email-dlq", schema: UserScopedSchema.extend({ to: z.string() }), options: {} },
   {
     name: "send-email",
-    schema: $UserScoped.extend({ to: z.string() }),
+    schema: UserScopedSchema.extend({ to: z.string() }),
     options: { deadLetter: "send-email-dlq", notify: true, retryLimit: 3 },
   },
   // `global: true` opts a queue out of the user-scoped default — see below.
@@ -82,13 +82,13 @@ bosskit collapses all of that into one Zod schema per queue:
 
 Every queue is **user-scoped** unless it opts out. A user-scoped queue's
 schema must produce `userId: string` — the easiest way is to extend the
-`$UserScoped` base schema bosskit exports:
+`UserScopedSchema` base schema bosskit exports:
 
 ```ts
-import { $UserScoped } from "bosskit";
+import { UserScopedSchema } from "bosskit";
 import { z } from "zod";
 
-const schema = $UserScoped.extend({ to: z.string() });
+const schema = UserScopedSchema.extend({ to: z.string() });
 // z.infer<typeof schema> is { userId: string; to: string }
 ```
 
@@ -119,7 +119,7 @@ annotation:
 
 ```ts
 const QUEUES = defineQueues([
-  { name: "send-email", schema: $UserScoped.extend({ to: z.string() }), options: {} },
+  { name: "send-email", schema: UserScopedSchema.extend({ to: z.string() }), options: {} },
 ]);
 ```
 
@@ -145,10 +145,10 @@ Two spellings destroy them, and both type-check:
 ```ts
 // Both compile. Both throw the registry's precise types away.
 const widened: QueueDefinition[] = [
-  { name: "send-email", schema: $UserScoped.extend({ to: z.string() }), options: {} },
+  { name: "send-email", schema: UserScopedSchema.extend({ to: z.string() }), options: {} },
 ];
 const alsoWidened: readonly QueueDefinition[] = [
-  { name: "send-email", schema: $UserScoped.extend({ to: z.string() }), options: {} },
+  { name: "send-email", schema: UserScopedSchema.extend({ to: z.string() }), options: {} },
 ];
 ```
 
@@ -171,10 +171,10 @@ Point a queue's `deadLetter` option at another queue's name:
 
 ```ts
 defineQueues([
-  { name: "send-email-dlq", schema: $UserScoped.extend({ to: z.string() }), options: {} },
+  { name: "send-email-dlq", schema: UserScopedSchema.extend({ to: z.string() }), options: {} },
   {
     name: "send-email",
-    schema: $UserScoped.extend({ to: z.string() }),
+    schema: UserScopedSchema.extend({ to: z.string() }),
     options: { deadLetter: "send-email-dlq" },
   },
 ]);
@@ -436,7 +436,7 @@ applySchedules, schemaFor }` bound to that registry:
 Declares a queue registry. See [`defineQueues`](#definequeues) above. Returns
 the array unchanged — its only job is to pin the `const` type parameter.
 
-### `$UserScoped`
+### `UserScopedSchema`
 
 `z.object({ userId: z.string() })`. The base schema every user-scoped queue's
 payload schema should `.extend()`.

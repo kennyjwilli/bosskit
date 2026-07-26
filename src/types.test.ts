@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { $UserScoped, defineQueues } from "./types";
+import { UserScopedSchema, defineQueues } from "./types";
 import type { QueueDefinition, QueuePayloadOf, SendableOf } from "./types";
 
 describe("user-scoped queue definitions", () => {
@@ -48,8 +48,8 @@ describe("user-scoped queue definitions", () => {
 
 describe("defineQueues", () => {
   it("preserves literal registry types without `as const satisfies`", () => {
-    const $A = $UserScoped.extend({ runId: z.string() });
-    const $B = $UserScoped.extend({ count: z.number() });
+    const $A = UserScopedSchema.extend({ runId: z.string() });
+    const $B = UserScopedSchema.extend({ count: z.number() });
 
     const QUEUES = defineQueues([
       { name: "a-dlq", schema: $A, options: { retryLimit: 2 } },

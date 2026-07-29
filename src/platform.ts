@@ -260,6 +260,7 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
     // Validate EVERY schedule before applying ANY, so an invalid entry can't
     // leave half the schedules upserted and the rest not.
     for (const s of declared) {
+      const label = `Schedule for queue "${s.queue}"${s.options?.key ? ` (key "${s.options.key}")` : ""}`;
       // Validate what the WORKER will see, not what was declared. Schedule data
       // is stored as jsonb and re-read at fire time, so a schema field that
       // accepts a non-JSON value — z.date(), z.instanceof(), z.map() — would
@@ -267,12 +268,25 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
       // string it became. Simulating the round trip is what makes this check
       // honest. Scheduled jobs never pass through `enqueue`, so this is the
       // only chance to catch it before 03:00.
-      const roundTripped: unknown = JSON.parse(JSON.stringify(s.data));
+      //
+      // The round trip itself can throw before safeParse ever runs — a BigInt,
+      // a circular reference, or (reachable when a caller's registry type has
+      // widened to `QueueDefinition[]`) a missing `data` entirely. Left
+      // unguarded those surface as a raw TypeError/SyntaxError naming neither
+      // queue nor key, bypassing the JobPlatformError contract this function
+      // otherwise guarantees.
+      let roundTripped: unknown;
+      try {
+        roundTripped = JSON.parse(JSON.stringify(s.data));
+      } catch (err) {
+        throw new JobPlatformError(
+          `${label} has data that is not JSON-serializable: ${String(err)}`
+        );
+      }
       const result = schemaFor(s.queue).safeParse(roundTripped);
       if (!result.success) {
-        const key = s.options?.key ? ` (key "${s.options.key}")` : "";
         throw new JobPlatformError(
-          `Schedule for queue "${s.queue}"${key} has an invalid payload: ${z.prettifyError(result.error)}`
+          `${label} has an invalid payload: ${z.prettifyError(result.error)}`
         );
       }
     }

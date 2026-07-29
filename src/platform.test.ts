@@ -235,9 +235,15 @@ describe("applySchedules payload validation", () => {
   // A field that is valid in memory but NOT valid after a jsonb round trip:
   // a Date goes in, an ISO string comes back, and z.date() rejects the string.
   const $Dated = z.object({ at: z.date(), userId: z.string() });
+  // A schema whose parse output is a Date built FROM the round-tripped string —
+  // structurally equal to the declared value but not the same object. Only
+  // this kind of schema can tell "sent as declared" apart from "sent as
+  // parsed": `$Sweep` has no coercion, so the two are indistinguishable there.
+  const $Coerce = z.object({ at: z.coerce.date(), userId: z.string() });
   const DEFINITIONS = defineQueues([
     { name: "sweep", schema: $Sweep },
     { name: "dated", schema: $Dated },
+    { name: "coerce", schema: $Coerce },
   ]);
 
   function platformFor(boss: PgBoss) {
@@ -259,6 +265,18 @@ describe("applySchedules payload validation", () => {
     expect(scheduled).toEqual([
       { cron: "0 3 * * *", data: { olderThanDays: 30, userId: "system" }, name: "sweep" },
     ]);
+  });
+
+  it("sends data as declared, not the parse output", async () => {
+    const { boss, scheduled } = schedulingBoss();
+    const at = new Date("2026-01-01T00:00:00.000Z");
+    await platformFor(boss).applySchedules(boss, [
+      { cron: "0 3 * * *", data: { at, userId: "system" }, queue: "coerce" },
+    ]);
+
+    // Identity, not structure: the parse output would be an equal-but-distinct
+    // Date built from the round-tripped ISO string.
+    expect((scheduled[0]?.data as { at: unknown }).at).toBe(at);
   });
 
   it("rejects a payload that does not satisfy the queue schema, naming the queue", async () => {
@@ -289,6 +307,23 @@ describe("applySchedules payload validation", () => {
         },
       ])
     ).rejects.toThrow(JobPlatformError);
+    expect(scheduled).toEqual([]);
+  });
+
+  it("rejects a payload that is not JSON-serializable, naming the queue", async () => {
+    const { boss, scheduled } = schedulingBoss();
+    const platform = platformFor(boss);
+    // A circular reference makes JSON.stringify throw before safeParse ever
+    // runs. Coerced past the compile-time check to reach the runtime guard,
+    // matching the precedent above.
+    const circular: Record<string, unknown> = { olderThanDays: 30, userId: "system" };
+    circular.self = circular;
+    const bad = [{ cron: "0 3 * * *", data: circular, queue: "sweep" }] as unknown as Parameters<
+      typeof platform.applySchedules
+    >[1];
+
+    await expect(platform.applySchedules(boss, bad)).rejects.toThrow(JobPlatformError);
+    await expect(platform.applySchedules(boss, bad)).rejects.toThrow(/queue "sweep"/);
     expect(scheduled).toEqual([]);
   });
 

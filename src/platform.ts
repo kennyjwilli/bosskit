@@ -1,7 +1,7 @@
 import type { JobWithMetadata, PgBoss, Db as PgBossDb, WorkOptions } from "pg-boss";
-import type { z } from "zod";
+import { z } from "zod";
 import { JobPlatformError } from "./errors";
-import { type ScheduleDefinition, schedulesToRemove } from "./schedules";
+import { type ScheduleOf, schedulesToRemove } from "./schedules";
 import {
   type JobLogger,
   type JobOptions,
@@ -255,10 +255,32 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
     }
   }
 
-  /** Idempotent sync: upsert every declared schedule, unschedule the rest. */
-  async function applySchedules(boss: PgBoss, declared: ScheduleDefinition<Name>[]): Promise<void> {
+  /** Idempotent sync: validate, upsert every declared schedule, unschedule the rest. */
+  async function applySchedules(boss: PgBoss, declared: ScheduleOf<D>[]): Promise<void> {
+    // Validate EVERY schedule before applying ANY, so an invalid entry can't
+    // leave half the schedules upserted and the rest not.
     for (const s of declared) {
-      await boss.schedule(s.queue, s.cron, s.data ?? null, s.options ?? {});
+      // Validate what the WORKER will see, not what was declared. Schedule data
+      // is stored as jsonb and re-read at fire time, so a schema field that
+      // accepts a non-JSON value — z.date(), z.instanceof(), z.map() — would
+      // pass here on the in-memory value and still fail every night on the
+      // string it became. Simulating the round trip is what makes this check
+      // honest. Scheduled jobs never pass through `enqueue`, so this is the
+      // only chance to catch it before 03:00.
+      const roundTripped: unknown = JSON.parse(JSON.stringify(s.data));
+      const result = schemaFor(s.queue).safeParse(roundTripped);
+      if (!result.success) {
+        const key = s.options?.key ? ` (key "${s.options.key}")` : "";
+        throw new JobPlatformError(
+          `Schedule for queue "${s.queue}"${key} has an invalid payload: ${z.prettifyError(result.error)}`
+        );
+      }
+    }
+    // `s.data` is sent as written, not the parse output: the value round-trips
+    // through jsonb before a worker sees it and is parsed again there, so
+    // rewriting it here would change what the author declared for no gain.
+    for (const s of declared) {
+      await boss.schedule(s.queue, s.cron, s.data, s.options ?? {});
     }
     const toRemove = schedulesToRemove(declared, await boss.getSchedules());
     for (const r of toRemove) {

@@ -1,10 +1,13 @@
 import type { QueueDefinition, QueuePayloadOf, SendableOf } from "./types";
 
 /**
- * Schedule declarations are generic over a registry's queue names, so a typo in
- * a schedule target is a compile error. The sync itself lives on the platform
- * (`applySchedules`) — it needs the registry's name type; this module holds the
- * declaration shape and the pure diff.
+ * The loose, registry-agnostic shape of a declared schedule: `data` is
+ * optional and `queue` is any string, not narrowed to a registry's names.
+ * `schedulesToRemove` (below) consumes this shape so it can diff schedules
+ * from any registry — or none — against what pg-boss has stored. `ScheduleOf`
+ * is assignable to it. Declaring schedules yourself? Use `ScheduleOf`, which
+ * binds `data` to one registry's queue payloads and is what `applySchedules`
+ * takes.
  */
 export type ScheduleDefinition<Name extends string = string> = {
   /** Queue that receives the scheduled job. */

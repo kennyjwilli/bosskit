@@ -116,14 +116,14 @@ function capturingBoss(): {
  */
 function schedulingBoss(existing: Schedule[] = []): {
   boss: PgBoss;
-  scheduled: Array<{ cron: string; data: unknown; name: string }>;
+  scheduled: Array<{ cron: string; data: unknown; name: string; options: unknown }>;
   unscheduled: Array<{ key?: string; name: string }>;
 } {
   const boss = new PgBoss("postgresql://user:pass@localhost:5432/unused");
-  const scheduled: Array<{ cron: string; data: unknown; name: string }> = [];
+  const scheduled: Array<{ cron: string; data: unknown; name: string; options: unknown }> = [];
   const unscheduled: Array<{ key?: string; name: string }> = [];
-  vi.spyOn(boss, "schedule").mockImplementation(async (name, cron, data) => {
-    scheduled.push({ cron, data, name });
+  vi.spyOn(boss, "schedule").mockImplementation(async (name, cron, data, options) => {
+    scheduled.push({ cron, data, name, options });
   });
   vi.spyOn(boss, "getSchedules").mockResolvedValue(existing);
   vi.spyOn(boss, "unschedule").mockImplementation(async (name, key) => {
@@ -263,7 +263,33 @@ describe("applySchedules payload validation", () => {
     ]);
 
     expect(scheduled).toEqual([
-      { cron: "0 3 * * *", data: { olderThanDays: 30, userId: "system" }, name: "sweep" },
+      {
+        cron: "0 3 * * *",
+        data: { olderThanDays: 30, userId: "system" },
+        name: "sweep",
+        options: {},
+      },
+    ]);
+  });
+
+  it("passes options through to boss.schedule verbatim", async () => {
+    const { boss, scheduled } = schedulingBoss();
+    await platformFor(boss).applySchedules(boss, [
+      {
+        cron: "0 3 * * *",
+        data: { olderThanDays: 30, userId: "system" },
+        options: { tz: "UTC" },
+        queue: "sweep",
+      },
+    ]);
+
+    expect(scheduled).toEqual([
+      {
+        cron: "0 3 * * *",
+        data: { olderThanDays: 30, userId: "system" },
+        name: "sweep",
+        options: { tz: "UTC" },
+      },
     ]);
   });
 
@@ -289,6 +315,24 @@ describe("applySchedules payload validation", () => {
 
     await expect(platform.applySchedules(boss, bad)).rejects.toThrow(JobPlatformError);
     await expect(platform.applySchedules(boss, bad)).rejects.toThrow(/queue "sweep"/);
+  });
+
+  it("includes the key in the error label for a keyed schedule with an invalid payload", async () => {
+    const { boss } = schedulingBoss();
+    const platform = platformFor(boss);
+    // Coerced past the compile-time check to reach the runtime guard, matching
+    // the precedent above — this time with a `key` so the `(key "…")` suffix
+    // in the error label has something to assert against.
+    const bad = [
+      {
+        cron: "0 3 * * *",
+        data: { olderThanDays: "thirty", userId: "system" },
+        options: { key: "eu" },
+        queue: "sweep",
+      },
+    ] as unknown as Parameters<typeof platform.applySchedules>[1];
+
+    await expect(platform.applySchedules(boss, bad)).rejects.toThrow(/queue "sweep" \(key "eu"\)/);
   });
 
   it("rejects a payload that is valid in memory but invalid after the jsonb round trip", async () => {
@@ -351,5 +395,14 @@ describe("applySchedules payload validation", () => {
     ]);
 
     expect(unscheduled).toEqual([{ key: "eu", name: "sweep" }]);
+  });
+
+  it("unschedules by name alone when the stale schedule has no key", async () => {
+    const { boss, unscheduled } = schedulingBoss([
+      { cron: "0 3 * * *", key: "", name: "stale", timezone: "UTC" },
+    ]);
+    await platformFor(boss).applySchedules(boss, []);
+
+    expect(unscheduled).toEqual([{ name: "stale" }]);
   });
 });

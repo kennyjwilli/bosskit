@@ -243,7 +243,10 @@ scheduled jobs internally, so they never pass through `enqueue`. Without this
 check an invalid payload surfaces as a job that fails at 03:00, retries,
 dead-letters, and repeats every night, with nothing said at deploy time. An
 invalid payload throws `JobPlatformError` and **no** schedule is applied — never
-a partial sync.
+a partial sync from a bad payload. (This pre-flight only validates payloads: an
+invalid cron expression or a queue pg-boss hasn't created yet is still caught
+per-schedule inside the apply loop, so those can leave an earlier schedule in
+the list applied.)
 
 The check runs against the JSON round-tripped value, because that is what a
 worker parses at fire time. A `z.date()` field handed a real `Date` is valid in
@@ -463,9 +466,9 @@ you.
 ### `JobPlatformError`
 
 Thrown by bosskit itself, never by a failed job: a misconfigured registry (the
-same queue name declared twice), a broken provider contract, or a schedule whose
-declared payload doesn't satisfy its queue's schema. Standard `Error` subclass:
-catch it with `instanceof JobPlatformError`.
+same queue name declared twice) or a schedule whose declared payload doesn't
+satisfy its queue's schema. Standard `Error` subclass: catch it with
+`instanceof JobPlatformError`.
 
 ### Types
 

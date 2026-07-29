@@ -10,7 +10,7 @@
 export { createBoss } from "./boss";
 export { JobPlatformError } from "./errors";
 export { createJobPlatform } from "./platform";
-export { type ScheduleDefinition, schedulesToRemove } from "./schedules";
+export { type ScheduleDefinition, type ScheduleOf, schedulesToRemove } from "./schedules";
 export {
   defineQueues,
   type JobLogger,

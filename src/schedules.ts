@@ -1,3 +1,5 @@
+import type { QueueDefinition, QueuePayloadOf, SendableOf } from "./types";
+
 /**
  * Schedule declarations are generic over a registry's queue names, so a typo in
  * a schedule target is a compile error. The sync itself lives on the platform
@@ -48,3 +50,32 @@ export function schedulesToRemove(
     .filter((e) => !declaredIds.has(idOf(e.name, e.key)))
     .map((e) => (!e.key ? { name: e.name } : { key: e.key, name: e.name }));
 }
+
+/**
+ * A schedule declaration bound to one registry. Distributing over the sendable
+ * queue names is what types `data` per queue: a schedule for queue "a" must
+ * carry queue "a"'s payload, so a mismatched or missing payload is a compile
+ * error rather than a job that fails every night at 03:00 forever.
+ *
+ * Dead-letter queues are excluded (`SendableOf`, not `QueueNameOf`) for the
+ * same reason `enqueue` excludes them: pg-boss populates a DLQ itself.
+ *
+ * `data` is Zod's OUTPUT type, so a field with `.default()` must still be
+ * supplied here — same as `enqueue`.
+ */
+export type ScheduleOf<D extends readonly QueueDefinition[]> = {
+  [Q in SendableOf<D>]: {
+    /** 5-field cron (minute precision) — pg-boss evaluates schedules every ~30s. */
+    cron: string;
+    /** This queue's payload. Must be JSON-round-trippable; it is stored as jsonb. */
+    data: QueuePayloadOf<D, Q>;
+    options?: {
+      /** Unique key when one queue needs multiple schedules. */
+      key?: string;
+      /** IANA time zone; pg-boss defaults to UTC. */
+      tz?: string;
+    };
+    /** Queue that receives the scheduled job. */
+    queue: Q;
+  };
+}[SendableOf<D>];

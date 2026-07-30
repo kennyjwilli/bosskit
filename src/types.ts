@@ -1,4 +1,4 @@
-import type { PgBoss } from "pg-boss";
+import type { JobWithMetadata, PgBoss } from "pg-boss";
 import { z } from "zod";
 
 /**
@@ -149,6 +149,37 @@ export type RegisteredWorker = {
   queue: string;
   register: (boss: PgBoss) => Promise<string>;
 };
+
+/**
+ * A hook wrapping every worker's run, for concerns that must not be
+ * per-worker opt-in — tracing, alerting, log context. Registered once on the
+ * platform, so it applies to every worker by construction.
+ *
+ * `jobs` is deliberately `unknown`: middleware runs OUTSIDE the parse loop, so
+ * these payloads have not been validated — coercions and defaults are
+ * unapplied and the data may not satisfy the schema at all. Typing them as the
+ * queue's payload would be a lie. `queue` keeps its exact literal type, so
+ * branching on queue name is fully checked.
+ *
+ * Four properties that will bite you if you don't know them:
+ *
+ * 1. Runs once per BATCH, not once per job. Identical at the default
+ *    `batchSize` of 1; not above it.
+ * 2. Wraps payload validation as well as the handler, so a payload that fails
+ *    `schema.parse` throws through `next()` and is observable here.
+ * 3. Swallowing an error MARKS THE JOB COMPLETE. pg-boss completes a batch when
+ *    the callback resolves and fails it when the callback throws, so catching
+ *    without rethrowing suppresses the retry and the dead-letter hop.
+ *    Middleware that reports errors must rethrow.
+ * 4. Not calling `next()` skips the handler and completes the job.
+ *
+ * Resolve to `void`. pg-boss stores a single-job batch's resolved value as job
+ * output, so returning something silently starts populating it.
+ */
+export type JobMiddleware<TName extends string = string> = (
+  ctx: { jobs: JobWithMetadata<unknown>[]; queue: TName },
+  next: () => Promise<void>
+) => Promise<void>;
 
 /**
  * Declare a queue registry.

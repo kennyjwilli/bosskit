@@ -4,6 +4,7 @@ import { JobPlatformError } from "./errors";
 import { type ScheduleOf, assertValidSchedulePayload, schedulesToRemove } from "./schedules";
 import {
   type JobLogger,
+  type JobMiddleware,
   type JobOptions,
   type QueueDefinition,
   type QueueNameOf,
@@ -81,6 +82,9 @@ function parseJobBatch<T>(
  *   parameter — written as `(db) => ...` it infers `unknown`, and `enqueue`
  *   then accepts any value at all as its `db`.
  * - `logger` — the platform never reaches for a global logger.
+ * - `middleware` — optional, wraps every worker's payload validation and
+ *   handler. Platform-level so it cannot be forgotten on one worker; see
+ *   `JobMiddleware` for the four behaviors that will bite you.
  *
  * All three type parameters are inferred from the call, so you never write an
  * explicit type argument. `const D` preserves the literal registry tuple, which
@@ -92,8 +96,10 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
   getRuntime: () => Promise<R>;
   toBossDb: (db: TDb) => PgBossDb;
   logger: JobLogger;
+  /** Optional hook wrapping every worker's validation and handler. See `JobMiddleware`. */
+  middleware?: JobMiddleware<QueueNameOf<D>>;
 }) {
-  const { definitions, getBoss, getRuntime, logger, toBossDb } = platform;
+  const { definitions, getBoss, getRuntime, logger, middleware, toBossDb } = platform;
 
   /**
    * Resolve the runtime at most once, lazily, on the first worker registration.
@@ -235,10 +241,16 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
           w.queue,
           { ...w.options, includeMetadata: true },
           async (jobs: JobWithMetadata<Payload<Q>>[]) => {
-            await w.handler({
-              ...runtime,
-              jobs: parseJobBatch(jobs, schema, w.queue, logger),
-            });
+            const run = async () => {
+              await w.handler({
+                ...runtime,
+                jobs: parseJobBatch(jobs, schema, w.queue, logger),
+              });
+            };
+            // Middleware wraps validation as well as the handler, so a bad
+            // payload throws through next() where a check-in can see it.
+            if (!middleware) return run();
+            return middleware({ jobs, queue: w.queue }, run);
           }
         );
       },

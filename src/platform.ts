@@ -84,7 +84,7 @@ function parseJobBatch<T>(
  * - `logger` — the platform never reaches for a global logger.
  * - `middleware` — optional, wraps every worker's payload validation and
  *   handler. Platform-level so it cannot be forgotten on one worker; see
- *   `JobMiddleware` for the four behaviors that will bite you.
+ *   `JobMiddleware` for the behaviors that will bite you.
  *
  * All three type parameters are inferred from the call, so you never write an
  * explicit type argument. `const D` preserves the literal registry tuple, which
@@ -218,9 +218,11 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
    * arrives without its prototype, so keep it plain data.
    *
    * A payload that fails validation throws, so the job fails → pg-boss retries
-   * → dead-letters, like any other handler error. Every job is also logged here
-   * with its queue, id, retry count and acting user, so no handler has to
-   * remember to trace who a job is for.
+   * → dead-letters, like any other handler error — unless platform `middleware`
+   * intercepts it: middleware that swallows the error or never calls `next()`
+   * skips all of that, including the log line above. See `JobMiddleware`.
+   * Every job is also logged here with its queue, id, retry count and acting
+   * user, so no handler has to remember to trace who a job is for.
    */
   function defineWorker<Q extends Name>(w: {
     queue: Q;

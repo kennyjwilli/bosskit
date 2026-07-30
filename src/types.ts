@@ -161,7 +161,7 @@ export type RegisteredWorker = {
  * queue's payload would be a lie. `queue` keeps its exact literal type, so
  * branching on queue name is fully checked.
  *
- * Four properties that will bite you if you don't know them:
+ * Properties that will bite you if you don't know them:
  *
  * 1. Runs once per BATCH, not once per job. Identical at the default
  *    `batchSize` of 1; not above it.
@@ -172,6 +172,9 @@ export type RegisteredWorker = {
  *    without rethrowing suppresses the retry and the dead-letter hop.
  *    Middleware that reports errors must rethrow.
  * 4. Not calling `next()` skips the handler and completes the job.
+ *
+ * `next()` is not idempotent: calling it twice re-parses the batch and
+ * re-runs the handler.
  *
  * The platform awaits this and discards whatever it resolves to, so its
  * signature returns `Promise<void>` — there is no channel back into pg-boss's

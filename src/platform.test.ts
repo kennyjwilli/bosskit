@@ -122,7 +122,9 @@ function capturingBoss(): {
       const name = queue ?? (captured.size === 1 ? [...captured.keys()][0] : undefined);
       if (name === undefined) {
         throw new Error(
-          "deliver() needs an explicit queue when more than one worker is registered"
+          captured.size === 0
+            ? "register() has not been called yet"
+            : "deliver() needs an explicit queue when more than one worker is registered"
         );
       }
       const handler = captured.get(name);
@@ -667,6 +669,55 @@ describe("platform middleware", () => {
       deliver([jobRow({ at: "not-a-date-at-all", userId: 42 })])
     ).resolves.toBeUndefined();
     expect(caught).toBeInstanceOf(z.ZodError);
+  });
+
+  it("fails the batch when middleware rethrows", async () => {
+    const { boss, deliver } = capturingBoss();
+    let reported: unknown;
+    const worker = platformFor(boss, async (_ctx, next) => {
+      try {
+        await next();
+      } catch (err) {
+        reported = err; // e.g. span.recordException(err)
+        throw err; // the documented pattern
+      }
+    }).defineWorker({ queue: "probe", handler: async () => {} });
+    await worker.register(boss);
+
+    await expect(deliver([jobRow({ at: "not-a-date", userId: 42 })])).rejects.toThrow();
+    expect(reported).toBeInstanceOf(z.ZodError);
+  });
+
+  it("fails the batch when middleware throws before calling next", async () => {
+    const { boss, deliver } = capturingBoss();
+    let handlerRan = false;
+    const worker = platformFor(boss, async () => {
+      throw new Error("mw boom");
+    }).defineWorker({
+      queue: "probe",
+      handler: async () => {
+        handlerRan = true;
+      },
+    });
+    await worker.register(boss);
+
+    await expect(deliver([validJob()])).rejects.toThrow("mw boom");
+    expect(handlerRan).toBe(false);
+  });
+
+  it("fails the batch when the handler rejects, propagating through next()", async () => {
+    const { boss, deliver } = capturingBoss();
+    const worker = platformFor(boss, async (_ctx, next) => {
+      await next(); // no try/catch: a handler rejection should reach pg-boss untouched
+    }).defineWorker({
+      queue: "probe",
+      handler: async () => {
+        throw new Error("handler boom");
+      },
+    });
+    await worker.register(boss);
+
+    await expect(deliver([validJob()])).rejects.toThrow("handler boom");
   });
 
   it("leaves behavior unchanged when no middleware is configured", async () => {

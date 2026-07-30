@@ -248,7 +248,7 @@ have not been validated yet, so coercions and defaults are unapplied and the
 data may not satisfy the schema at all. `ctx.queue` keeps its exact literal
 type, so branching on the queue name is fully checked.
 
-Three behaviors worth knowing before you write one:
+Behaviors worth knowing before you write one:
 
 - It runs **once per batch**, not once per job. Identical at the default
   `batchSize` of 1; not above it.

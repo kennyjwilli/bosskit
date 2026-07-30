@@ -4,6 +4,7 @@ import { JobPlatformError } from "./errors";
 import { type ScheduleOf, assertValidSchedulePayload, schedulesToRemove } from "./schedules";
 import {
   type JobLogger,
+  type JobMiddleware,
   type JobOptions,
   type QueueDefinition,
   type QueueNameOf,
@@ -12,6 +13,45 @@ import {
   type SendableOf,
   UserScopedSchema,
 } from "./types";
+
+/**
+ * Parse and log one batch of jobs on the way into a handler. Pure apart from
+ * the logger call, and takes the schema rather than reaching for a registry, so
+ * it stays readable outside the platform closure it is called from.
+ *
+ * The handler is handed the PARSED jobs, not the raw ones. `data` arrives as
+ * jsonb, and the handler's type is the schema's OUTPUT type — so a
+ * `z.coerce.date()` field must reach it as a Date and a `.default()` field must
+ * be filled in, not left undefined.
+ *
+ * Parsing is per BATCH: a payload that fails validation throws, failing every
+ * job fetched alongside it. That never comes up at the default `batchSize` of 1.
+ */
+function parseJobBatch<T>(
+  jobs: JobWithMetadata<unknown>[],
+  schema: z.ZodType<T>,
+  queue: string,
+  logger: JobLogger
+): JobWithMetadata<T>[] {
+  const parsed: JobWithMetadata<T>[] = [];
+  for (const job of jobs) {
+    const data = schema.parse(job.data);
+    // Uniform actor trace for every queue. safeParse (not a cast) so this also
+    // works for `global` queues, whose payloads carry no user.
+    const actor = UserScopedSchema.safeParse(data);
+    logger.info(
+      {
+        jobId: job.id,
+        queue,
+        retryCount: job.retryCount,
+        userId: actor.success ? actor.data.userId : undefined,
+      },
+      "job received"
+    );
+    parsed.push({ ...job, data });
+  }
+  return parsed;
+}
 
 /**
  * Build a job platform bound to one queue registry.
@@ -42,6 +82,9 @@ import {
  *   parameter — written as `(db) => ...` it infers `unknown`, and `enqueue`
  *   then accepts any value at all as its `db`.
  * - `logger` — the platform never reaches for a global logger.
+ * - `middleware` — optional, wraps every worker's payload validation and
+ *   handler. Platform-level so it cannot be forgotten on one worker; see
+ *   `JobMiddleware` for the behaviors that will bite you.
  *
  * All three type parameters are inferred from the call, so you never write an
  * explicit type argument. `const D` preserves the literal registry tuple, which
@@ -53,8 +96,10 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
   getRuntime: () => Promise<R>;
   toBossDb: (db: TDb) => PgBossDb;
   logger: JobLogger;
+  /** Optional hook wrapping every worker's validation and handler. See `JobMiddleware`. */
+  middleware?: JobMiddleware<QueueNameOf<D>>;
 }) {
-  const { definitions, getBoss, getRuntime, logger, toBossDb } = platform;
+  const { definitions, getBoss, getRuntime, logger, middleware, toBossDb } = platform;
 
   /**
    * Resolve the runtime at most once, lazily, on the first worker registration.
@@ -172,14 +217,12 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
    * themselves. The spread is shallow: a runtime that is a class instance
    * arrives without its prototype, so keep it plain data.
    *
-   * Each job's payload is parsed through the queue's schema at this boundary and
-   * the handler receives the PARSED jobs, so coercions and defaults declared in
-   * the schema are already applied when it runs. A payload that fails validation
-   * throws, so the job fails → pg-boss retries → dead-letters, like any other
-   * handler error; parsing is per batch, so one bad payload fails the whole
-   * batch it arrived in. Every job is also logged here with its queue, id, retry
-   * count and acting user, so no handler has to remember to trace who a job is
-   * for.
+   * A payload that fails validation throws, so the job fails → pg-boss retries
+   * → dead-letters, like any other handler error — unless platform `middleware`
+   * intercepts it: middleware that swallows the error or never calls `next()`
+   * skips all of that, including the log line above. See `JobMiddleware`.
+   * Every job is also logged here with its queue, id, retry count and acting
+   * user, so no handler has to remember to trace who a job is for.
    */
   function defineWorker<Q extends Name>(w: {
     queue: Q;
@@ -200,28 +243,20 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
           w.queue,
           { ...w.options, includeMetadata: true },
           async (jobs: JobWithMetadata<Payload<Q>>[]) => {
-            // The handler is handed the PARSED jobs, not the raw ones. `data`
-            // arrives as jsonb, and the handler's type is the schema's OUTPUT
-            // type — so a `z.coerce.date()` field must reach it as a Date and a
-            // `.default()` field must be filled in, not left undefined.
-            const parsed: JobWithMetadata<Payload<Q>>[] = [];
-            for (const job of jobs) {
-              const data = schema.parse(job.data);
-              // Uniform actor trace for every queue. safeParse (not a cast) so
-              // this also works for `global` queues, whose payloads carry no user.
-              const actor = UserScopedSchema.safeParse(data);
-              logger.info(
-                {
-                  jobId: job.id,
-                  queue: w.queue,
-                  retryCount: job.retryCount,
-                  userId: actor.success ? actor.data.userId : undefined,
-                },
-                "job received"
-              );
-              parsed.push({ ...job, data });
-            }
-            await w.handler({ ...runtime, jobs: parsed });
+            const run = async () => {
+              await w.handler({
+                ...runtime,
+                jobs: parseJobBatch(jobs, schema, w.queue, logger),
+              });
+            };
+            // Middleware wraps validation as well as the handler, so a bad
+            // payload throws through next() where a check-in can see it.
+            if (!middleware) return run();
+            // Awaited, not returned: pg-boss stores a single-job batch's
+            // resolved callback value as job output, so returning
+            // middleware's resolved value would leak it there. Awaiting
+            // keeps this handler's own resolution at `undefined`.
+            await middleware({ jobs, queue: w.queue }, run);
           }
         );
       },

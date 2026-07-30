@@ -14,6 +14,7 @@ export { type ScheduleDefinition, type ScheduleOf, schedulesToRemove } from "./s
 export {
   defineQueues,
   type JobLogger,
+  type JobMiddleware,
   type JobOptions,
   type QueueDefinition,
   type QueueNameOf,

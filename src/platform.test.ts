@@ -3,7 +3,13 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { JobPlatformError } from "./errors";
 import { createJobPlatform } from "./platform";
-import { type QueueDefinition, defineQueues } from "./types";
+import {
+  type JobLogger,
+  type JobMiddleware,
+  type QueueDefinition,
+  type QueueNameOf,
+  defineQueues,
+} from "./types";
 
 const $Payload = z.object({ userId: z.string() });
 
@@ -47,7 +53,10 @@ describe("createJobPlatform registry validation", () => {
  * tests is what happens between the raw jsonb pg-boss hands over and the parsed
  * payload the handler is promised.
  */
-function jobRow<T>(data: T): JobWithMetadata<T> {
+function jobRow<T>(
+  data: T,
+  overrides: { name?: string; retryCount?: number } = {}
+): JobWithMetadata<T> {
   const now = new Date("2026-01-01T00:00:00.000Z");
   return {
     blocked: false,
@@ -62,13 +71,13 @@ function jobRow<T>(data: T): JobWithMetadata<T> {
     heartbeatSeconds: null,
     id: "00000000-0000-0000-0000-000000000001",
     keepUntil: now,
-    name: "probe",
+    name: overrides.name ?? "probe",
     output: {},
     pendingDependencies: 0,
     policy: "standard",
     priority: 0,
     retryBackoff: false,
-    retryCount: 0,
+    retryCount: overrides.retryCount ?? 0,
     retryDelay: 0,
     retryLimit: 0,
     signal: AbortSignal.abort(),
@@ -89,22 +98,38 @@ function jobRow<T>(data: T): JobWithMetadata<T> {
  * `register` can be driven end to end and the handler pg-boss would have been
  * given can be invoked directly. Returns a getter rather than the handler
  * because `register` has not run yet when this is called.
+ *
+ * Keyed by queue name (not a single slot) so one boss can back several
+ * concurrently-registered workers — the shape a platform-level middleware test
+ * needs to prove it wraps every worker, not just the one registered first.
+ * `deliver`'s `queue` argument is optional: with exactly one worker registered
+ * there is only one handler to pick, so existing single-worker call sites are
+ * unaffected.
  */
 function capturingBoss(): {
   boss: PgBoss;
-  deliver: (jobs: JobWithMetadata<unknown>[]) => Promise<unknown>;
+  deliver: (jobs: JobWithMetadata<unknown>[], queue?: string) => Promise<unknown>;
 } {
   const boss = new PgBoss("postgresql://user:pass@localhost:5432/unused");
-  let captured: ((jobs: JobWithMetadata<unknown>[]) => Promise<unknown>) | undefined;
-  vi.spyOn(boss, "work").mockImplementation(async (_name, _options, handler) => {
-    captured = handler;
+  const captured = new Map<string, (jobs: JobWithMetadata<unknown>[]) => Promise<unknown>>();
+  vi.spyOn(boss, "work").mockImplementation(async (name, _options, handler) => {
+    captured.set(name, handler);
     return "worker-id";
   });
   return {
     boss,
-    deliver: (jobs) => {
-      if (!captured) throw new Error("register() has not been called yet");
-      return captured(jobs);
+    deliver: (jobs, queue) => {
+      const name = queue ?? (captured.size === 1 ? [...captured.keys()][0] : undefined);
+      if (name === undefined) {
+        throw new Error(
+          captured.size === 0
+            ? "register() has not been called yet"
+            : "deliver() needs an explicit queue when more than one worker is registered"
+        );
+      }
+      const handler = captured.get(name);
+      if (!handler) throw new Error(`register() has not been called yet for queue "${name}"`);
+      return handler(jobs);
     },
   };
 }
@@ -140,14 +165,21 @@ describe("defineWorker payload parsing", () => {
     tier: z.string().default("free"),
     userId: z.string(),
   });
-  const DEFINITIONS = defineQueues([{ name: "probe", schema: $Coercing }]);
+  // A schema with no `userId` at all — only a `global: true` queue may carry
+  // one, and it's what lets the logging tests below exercise the
+  // `actor.success ? … : undefined` fallback for a job with no acting user.
+  const $Global = z.object({ note: z.string().optional() });
+  const DEFINITIONS = defineQueues([
+    { name: "probe", schema: $Coercing },
+    { global: true, name: "global-probe", schema: $Global },
+  ]);
 
-  function platformFor(boss: PgBoss) {
+  function platformFor(boss: PgBoss, logger?: JobLogger) {
     return createJobPlatform({
       definitions: DEFINITIONS,
       getBoss: async () => boss,
       getRuntime: async () => ({ tag: "runtime" }),
-      logger: { error: () => {}, info: () => {}, warn: () => {} },
+      logger: logger ?? { error: () => {}, info: () => {}, warn: () => {} },
       toBossDb: (): PgBossDb => ({ executeSql: () => Promise.reject(new Error("unused")) }),
     });
   }
@@ -213,6 +245,75 @@ describe("defineWorker payload parsing", () => {
       ])
     ).rejects.toThrow();
     expect(handlerRan).toBe(false);
+  });
+
+  // Moved from `describe("platform middleware")`: this exercises
+  // `parseJobBatch`'s logging, not middleware, and belongs with the rest of
+  // the parsing tests. `jobRow`'s `name`/`retryCount` overrides deliberately
+  // differ from the asserted `queue` and the real `retryCount`'s zero value,
+  // so a logger reading `job.name` instead of `queue`, or hardcoding
+  // `retryCount`, cannot pass by fixture accident.
+  it("logs jobId, queue, retryCount, and userId under a 'job received' message", async () => {
+    const { boss, deliver } = capturingBoss();
+    const logged: Array<{ msg: string; obj: Record<string, unknown> }> = [];
+
+    const worker = platformFor(boss, {
+      error: () => {},
+      info: (obj, msg) => {
+        logged.push({ msg, obj });
+      },
+      warn: () => {},
+    }).defineWorker({
+      queue: "probe",
+      handler: async () => {},
+    });
+    await worker.register(boss);
+
+    await deliver([
+      jobRow(
+        { at: "2026-07-26T12:00:00.000Z", userId: "user_1" },
+        { name: "not-probe", retryCount: 3 }
+      ),
+    ]);
+
+    expect(logged).toContainEqual({
+      msg: "job received",
+      obj: {
+        jobId: "00000000-0000-0000-0000-000000000001",
+        queue: "probe",
+        retryCount: 3,
+        userId: "user_1",
+      },
+    });
+  });
+
+  it("logs userId as undefined for a global queue payload with no acting user", async () => {
+    const { boss, deliver } = capturingBoss();
+    const logged: Array<{ msg: string; obj: Record<string, unknown> }> = [];
+
+    const worker = platformFor(boss, {
+      error: () => {},
+      info: (obj, msg) => {
+        logged.push({ msg, obj });
+      },
+      warn: () => {},
+    }).defineWorker({
+      queue: "global-probe",
+      handler: async () => {},
+    });
+    await worker.register(boss);
+
+    await deliver([jobRow({ note: "system sweep" })]);
+
+    expect(logged).toContainEqual({
+      msg: "job received",
+      obj: {
+        jobId: "00000000-0000-0000-0000-000000000001",
+        queue: "global-probe",
+        retryCount: 0,
+        userId: undefined,
+      },
+    });
   });
 });
 
@@ -404,5 +505,233 @@ describe("applySchedules payload validation", () => {
     await platformFor(boss).applySchedules(boss, []);
 
     expect(unscheduled).toEqual([{ name: "stale" }]);
+  });
+});
+
+describe("platform middleware", () => {
+  const $Coercing = z.object({ at: z.coerce.date(), userId: z.string() });
+  // Two queues, not one: a middleware wired up on only the first worker
+  // registered is indistinguishable from a platform-wide hook as long as
+  // there's only one worker to check. The second queue is what forces that
+  // distinction.
+  const DEFINITIONS = defineQueues([
+    { name: "probe", schema: $Coercing },
+    { name: "probe-two", schema: $Coercing },
+  ]);
+
+  function platformFor(boss: PgBoss, middleware?: JobMiddleware<QueueNameOf<typeof DEFINITIONS>>) {
+    return createJobPlatform({
+      definitions: DEFINITIONS,
+      getBoss: async () => boss,
+      getRuntime: async () => ({ tag: "runtime" }),
+      logger: { error: () => {}, info: () => {}, warn: () => {} },
+      middleware,
+      toBossDb: (): PgBossDb => ({ executeSql: () => Promise.reject(new Error("unused")) }),
+    });
+  }
+
+  const validJob = () => jobRow({ at: "2026-07-26T12:00:00.000Z", userId: "user_1" });
+
+  it("wraps every handler run, so a cross-cutting concern cannot be forgotten", async () => {
+    const { boss, deliver } = capturingBoss();
+    const events: string[] = [];
+    const platform = platformFor(boss, async (ctx, next) => {
+      events.push(`before:${ctx.queue}:${ctx.jobs.length}`);
+      await next();
+      events.push(`after:${ctx.queue}`);
+    });
+    const workerOne = platform.defineWorker({
+      queue: "probe",
+      handler: async () => {
+        events.push("handler:probe");
+      },
+    });
+    const workerTwo = platform.defineWorker({
+      queue: "probe-two",
+      handler: async () => {
+        events.push("handler:probe-two");
+      },
+    });
+    await workerOne.register(boss);
+    await workerTwo.register(boss);
+
+    await deliver([validJob()], "probe");
+    await deliver([validJob()], "probe-two");
+
+    // Registered on ONE platform, delivered to each — a middleware wired to
+    // only the first-registered worker leaves the second queue's events out
+    // entirely.
+    expect(events).toEqual([
+      "before:probe:1",
+      "handler:probe",
+      "after:probe",
+      "before:probe-two:1",
+      "handler:probe-two",
+      "after:probe-two",
+    ]);
+  });
+
+  it("runs middleware exactly once per BATCH, not once per job", async () => {
+    const { boss, deliver } = capturingBoss();
+    let callCount = 0;
+    let jobsSeen: number | undefined;
+    const worker = platformFor(boss, async (ctx, next) => {
+      callCount += 1;
+      jobsSeen = ctx.jobs.length;
+      await next();
+    }).defineWorker({
+      queue: "probe",
+      handler: async () => {},
+    });
+    await worker.register(boss);
+
+    // A batch of 3, not 1: at the default batchSize of 1 per-batch and
+    // per-job dispatch are indistinguishable, so this is the only way to
+    // prove middleware wraps the whole batch rather than each job in it.
+    await deliver([validJob(), validJob(), validJob()]);
+
+    expect(callCount).toBe(1);
+    expect(jobsSeen).toBe(3);
+  });
+
+  it("discards whatever middleware resolves to, so it cannot leak into pg-boss job output", async () => {
+    const { boss, deliver } = capturingBoss();
+    const worker = platformFor(boss, async (_ctx, next) => {
+      await next();
+      // Coerced past `Promise<void>` on purpose: this is the only way to
+      // prove at runtime that the platform discards a middleware return
+      // value, rather than relying on the type system to forbid it.
+      return "leaked-value" as unknown as undefined;
+    }).defineWorker({
+      queue: "probe",
+      handler: async () => {},
+    });
+    await worker.register(boss);
+
+    await expect(deliver([validJob()])).resolves.toBeUndefined();
+  });
+
+  it("skips the handler when middleware does not call next", async () => {
+    const { boss, deliver } = capturingBoss();
+    let handlerRan = false;
+    const worker = platformFor(boss, async () => {}).defineWorker({
+      queue: "probe",
+      handler: async () => {
+        handlerRan = true;
+      },
+    });
+    await worker.register(boss);
+    await deliver([validJob()]);
+
+    expect(handlerRan).toBe(false);
+  });
+
+  it("receives RAW pre-validation jobs, not the parsed payloads the handler gets", async () => {
+    const { boss, deliver } = capturingBoss();
+    let middlewareSaw: unknown;
+    let handlerSaw: unknown;
+    const worker = platformFor(boss, async (ctx, next) => {
+      middlewareSaw = (ctx.jobs[0]?.data as { at: unknown }).at;
+      await next();
+    }).defineWorker({
+      queue: "probe",
+      handler: async ({ jobs }) => {
+        handlerSaw = jobs[0]?.data.at;
+      },
+    });
+    await worker.register(boss);
+    await deliver([validJob()]);
+
+    // Middleware runs before the parse loop, so it sees the raw jsonb string.
+    expect(middlewareSaw).toBe("2026-07-26T12:00:00.000Z");
+    expect(handlerSaw).toBeInstanceOf(Date);
+  });
+
+  it("surfaces a payload validation failure through next, and swallowing it completes the batch", async () => {
+    const { boss, deliver } = capturingBoss();
+    let caught: unknown;
+    const worker = platformFor(boss, async (_ctx, next) => {
+      try {
+        await next();
+      } catch (err) {
+        caught = err;
+      }
+    }).defineWorker({ queue: "probe", handler: async () => {} });
+    await worker.register(boss);
+
+    // `at` cannot coerce and `userId` is the wrong type, so the parse throws
+    // inside next(). Middleware swallows it, so the batch RESOLVES — which is
+    // exactly why swallowing marks a job complete and suppresses the retry.
+    // The callback resolves to void (middleware swallowed the error and
+    // returned nothing), not undefined-as-a-rejection — `.resolves` itself is
+    // the load-bearing check: it fails if the promise rejects instead.
+    await expect(
+      deliver([jobRow({ at: "not-a-date-at-all", userId: 42 })])
+    ).resolves.toBeUndefined();
+    expect(caught).toBeInstanceOf(z.ZodError);
+  });
+
+  it("fails the batch when middleware rethrows", async () => {
+    const { boss, deliver } = capturingBoss();
+    let reported: unknown;
+    const worker = platformFor(boss, async (_ctx, next) => {
+      try {
+        await next();
+      } catch (err) {
+        reported = err; // e.g. span.recordException(err)
+        throw err; // the documented pattern
+      }
+    }).defineWorker({ queue: "probe", handler: async () => {} });
+    await worker.register(boss);
+
+    await expect(deliver([jobRow({ at: "not-a-date", userId: 42 })])).rejects.toThrow();
+    expect(reported).toBeInstanceOf(z.ZodError);
+  });
+
+  it("fails the batch when middleware throws before calling next", async () => {
+    const { boss, deliver } = capturingBoss();
+    let handlerRan = false;
+    const worker = platformFor(boss, async () => {
+      throw new Error("mw boom");
+    }).defineWorker({
+      queue: "probe",
+      handler: async () => {
+        handlerRan = true;
+      },
+    });
+    await worker.register(boss);
+
+    await expect(deliver([validJob()])).rejects.toThrow("mw boom");
+    expect(handlerRan).toBe(false);
+  });
+
+  it("fails the batch when the handler rejects, propagating through next()", async () => {
+    const { boss, deliver } = capturingBoss();
+    const worker = platformFor(boss, async (_ctx, next) => {
+      await next(); // no try/catch: a handler rejection should reach pg-boss untouched
+    }).defineWorker({
+      queue: "probe",
+      handler: async () => {
+        throw new Error("handler boom");
+      },
+    });
+    await worker.register(boss);
+
+    await expect(deliver([validJob()])).rejects.toThrow("handler boom");
+  });
+
+  it("leaves behavior unchanged when no middleware is configured", async () => {
+    const { boss, deliver } = capturingBoss();
+    let handlerSaw: unknown;
+    const worker = platformFor(boss).defineWorker({
+      queue: "probe",
+      handler: async ({ jobs }) => {
+        handlerSaw = jobs[0]?.data.at;
+      },
+    });
+    await worker.register(boss);
+    await deliver([validJob()]);
+
+    expect(handlerSaw).toBeInstanceOf(Date);
   });
 });

@@ -14,6 +14,44 @@ import {
 } from "./types";
 
 /**
+ * Throw if a declared schedule's payload would fail in a worker. Pure and
+ * total — it either returns or throws, and reads nothing outside its arguments,
+ * so it takes the queue's schema rather than reaching for a registry.
+ *
+ * Validates what the WORKER will see, not what was declared. Schedule data is
+ * stored as jsonb and re-read at fire time, so a schema field that accepts a
+ * non-JSON value — z.date(), z.instanceof(), z.map() — would pass on the
+ * in-memory value and still fail every night on the string it became.
+ * Simulating the round trip is what makes this check honest. Scheduled jobs
+ * never pass through `enqueue`, so this is the only chance to catch it before
+ * 03:00.
+ *
+ * The round trip itself can throw before safeParse ever runs — a BigInt, a
+ * circular reference, or (reachable when a caller's registry type has widened
+ * to `QueueDefinition[]`) a missing `data` entirely. Left unguarded those
+ * surface as a raw TypeError/SyntaxError naming neither queue nor key,
+ * bypassing the JobPlatformError contract `applySchedules` otherwise
+ * guarantees.
+ */
+function assertValidSchedulePayload(
+  schedule: { data: unknown; options?: { key?: string }; queue: string },
+  schema: z.ZodType
+): void {
+  const key = schedule.options?.key ? ` (key "${schedule.options.key}")` : "";
+  const label = `Schedule for queue "${schedule.queue}"${key}`;
+  let roundTripped: unknown;
+  try {
+    roundTripped = JSON.parse(JSON.stringify(schedule.data));
+  } catch (err) {
+    throw new JobPlatformError(`${label} has data that is not JSON-serializable: ${String(err)}`);
+  }
+  const result = schema.safeParse(roundTripped);
+  if (!result.success) {
+    throw new JobPlatformError(`${label} has an invalid payload: ${z.prettifyError(result.error)}`);
+  }
+}
+
+/**
  * Build a job platform bound to one queue registry.
  *
  * This is the package's only entry point, and the reason nothing inside it
@@ -260,35 +298,7 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
     // Validate EVERY schedule before applying ANY, so an invalid entry can't
     // leave half the schedules upserted and the rest not.
     for (const s of declared) {
-      const label = `Schedule for queue "${s.queue}"${s.options?.key ? ` (key "${s.options.key}")` : ""}`;
-      // Validate what the WORKER will see, not what was declared. Schedule data
-      // is stored as jsonb and re-read at fire time, so a schema field that
-      // accepts a non-JSON value — z.date(), z.instanceof(), z.map() — would
-      // pass here on the in-memory value and still fail every night on the
-      // string it became. Simulating the round trip is what makes this check
-      // honest. Scheduled jobs never pass through `enqueue`, so this is the
-      // only chance to catch it before 03:00.
-      //
-      // The round trip itself can throw before safeParse ever runs — a BigInt,
-      // a circular reference, or (reachable when a caller's registry type has
-      // widened to `QueueDefinition[]`) a missing `data` entirely. Left
-      // unguarded those surface as a raw TypeError/SyntaxError naming neither
-      // queue nor key, bypassing the JobPlatformError contract this function
-      // otherwise guarantees.
-      let roundTripped: unknown;
-      try {
-        roundTripped = JSON.parse(JSON.stringify(s.data));
-      } catch (err) {
-        throw new JobPlatformError(
-          `${label} has data that is not JSON-serializable: ${String(err)}`
-        );
-      }
-      const result = schemaFor(s.queue).safeParse(roundTripped);
-      if (!result.success) {
-        throw new JobPlatformError(
-          `${label} has an invalid payload: ${z.prettifyError(result.error)}`
-        );
-      }
+      assertValidSchedulePayload(s, schemaFor(s.queue));
     }
     // `s.data` is sent as written, not the parse output: the value round-trips
     // through jsonb before a worker sees it and is parsed again there, so

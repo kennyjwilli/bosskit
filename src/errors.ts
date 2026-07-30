@@ -1,7 +1,8 @@
 /**
- * Errors raised by the job platform itself — a misconfigured registry or a
- * broken provider contract, not a job that failed. Always thrown at
- * construction or boot, never from a job handler.
+ * Errors raised by the job platform itself — a misconfigured registry, or a
+ * declared schedule whose payload doesn't satisfy its queue's schema. Never a
+ * job that failed. Always thrown at construction, boot, or schedule sync,
+ * never from a job handler.
  *
  * A plain named subclass rather than a richer error type from some error
  * framework: bosskit has zero runtime dependencies, and an error class is not

@@ -1,7 +1,7 @@
 import type { JobWithMetadata, PgBoss, Db as PgBossDb, WorkOptions } from "pg-boss";
 import type { z } from "zod";
 import { JobPlatformError } from "./errors";
-import { type ScheduleDefinition, schedulesToRemove } from "./schedules";
+import { type ScheduleOf, assertValidSchedulePayload, schedulesToRemove } from "./schedules";
 import {
   type JobLogger,
   type JobOptions,
@@ -255,10 +255,18 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
     }
   }
 
-  /** Idempotent sync: upsert every declared schedule, unschedule the rest. */
-  async function applySchedules(boss: PgBoss, declared: ScheduleDefinition<Name>[]): Promise<void> {
+  /** Idempotent sync: validate, upsert every declared schedule, unschedule the rest. */
+  async function applySchedules(boss: PgBoss, declared: ScheduleOf<D>[]): Promise<void> {
+    // Validate EVERY schedule before applying ANY, so an invalid entry can't
+    // leave half the schedules upserted and the rest not.
     for (const s of declared) {
-      await boss.schedule(s.queue, s.cron, s.data ?? null, s.options ?? {});
+      assertValidSchedulePayload(s, schemaFor(s.queue));
+    }
+    // `s.data` is sent as written, not the parse output: the value round-trips
+    // through jsonb before a worker sees it and is parsed again there, so
+    // rewriting it here would change what the author declared for no gain.
+    for (const s of declared) {
+      await boss.schedule(s.queue, s.cron, s.data, s.options ?? {});
     }
     const toRemove = schedulesToRemove(declared, await boss.getSchedules());
     for (const r of toRemove) {

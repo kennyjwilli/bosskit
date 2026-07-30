@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import type { ScheduleOf } from "./schedules";
 import { UserScopedSchema, defineQueues } from "./types";
 import type { QueueDefinition, QueuePayloadOf, SendableOf } from "./types";
 
@@ -78,5 +79,42 @@ describe("defineQueues", () => {
     // @ts-expect-error schema must satisfy z.ZodType<UserScoped> unless global: true
     const bad = defineQueues([{ name: "x", schema: z.object({ q: z.string() }) }]);
     expect(bad).toHaveLength(1);
+  });
+});
+
+describe("ScheduleOf", () => {
+  const $Alpha = UserScopedSchema.extend({ runId: z.string() });
+  const $Beta = UserScopedSchema.extend({ count: z.number() });
+  const QUEUES = defineQueues([
+    { name: "alpha-dlq", schema: $Alpha },
+    { name: "alpha", options: { deadLetter: "alpha-dlq" }, schema: $Alpha },
+    { name: "beta", schema: $Beta },
+  ]);
+
+  it("binds a schedule's data to its own queue's payload", () => {
+    const good: ScheduleOf<typeof QUEUES> = {
+      cron: "0 3 * * *",
+      data: { runId: "r", userId: "u" },
+      queue: "alpha",
+    };
+
+    // @ts-expect-error runId belongs to queue "alpha", not queue "beta"
+    // biome-ignore format: must stay on one line — TS reports this error on the `data` property, so reflowing it would leave the directive above unused (TS2578) and break the build
+    const wrongData: ScheduleOf<typeof QUEUES> = { cron: "0 3 * * *", data: { runId: "r", userId: "u" }, queue: "beta" };
+
+    // @ts-expect-error a dead-letter queue is not a schedule target
+    // biome-ignore format: must stay on one line — TS reports this error on the `queue` property, so reflowing it would leave the directive above unused (TS2578) and break the build
+    const dlqTarget: ScheduleOf<typeof QUEUES> = { cron: "0 3 * * *", data: { runId: "r", userId: "u" }, queue: "alpha-dlq" };
+
+    // @ts-expect-error data is required — omitting it stores null, which fails the worker's parse
+    const noData: ScheduleOf<typeof QUEUES> = { cron: "0 3 * * *", queue: "alpha" };
+
+    // As elsewhere in this file the real assertions are the directives above,
+    // which fail the BUILD if any line starts compiling. These keep the
+    // bindings used rather than dead.
+    expect(good.queue).toBe("alpha");
+    expect(wrongData.queue).toBe("beta");
+    expect(dlqTarget.queue).toBe("alpha-dlq");
+    expect(noData.queue).toBe("alpha");
   });
 });

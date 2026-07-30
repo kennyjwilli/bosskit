@@ -150,6 +150,11 @@ shape — and stops rejecting dead-letter queue names, so
 If `enqueue` has stopped complaining about a payload you know is wrong, this
 is why.
 
+`ScheduleOf` collapses the same way: against a widened registry any string
+queue and near-any `data` compile. `applySchedules` still catches it at boot —
+an unknown queue throws `Unknown queue` and a bad payload fails validation —
+but you lose the compile-time check.
+
 ## Dead-letter queues
 
 Point a queue's `deadLetter` option at another queue's name:
@@ -213,25 +218,43 @@ handler has to remember to trace who a job is for.
 ## Schedules
 
 ```ts
-import type { QueueNameOf, ScheduleDefinition } from "bosskit";
+import type { ScheduleOf } from "bosskit";
 
 // QUEUES is the registry from the opening example, which declares nightly-cleanup.
-const schedules: ScheduleDefinition<QueueNameOf<typeof QUEUES>>[] = [
-  { queue: "nightly-cleanup", cron: "0 3 * * *", data: { olderThanDays: 30 }, options: { tz: "UTC" } },
+const schedules: ScheduleOf<typeof QUEUES>[] = [
+  { cron: "0 3 * * *", data: { olderThanDays: 30 }, options: { tz: "UTC" }, queue: "nightly-cleanup" },
 ];
 
 await applySchedules(boss, schedules);
 ```
 
-`QueueNameOf<typeof QUEUES>` is the registry's set of queue names, so a typo
-in `queue` is a compile error rather than a schedule that silently targets
-nothing.
+`ScheduleOf<typeof QUEUES>` binds each schedule to one queue: a typo in `queue`
+is a compile error, and `data` must be that queue's payload. Dead-letter queues
+are excluded, as they are for `enqueue`.
 
 `applySchedules` (returned by `createJobPlatform`, alongside `enqueue` and
-`defineWorker`) is an idempotent sync: it upserts every schedule you pass in,
-then unschedules any schedule pg-boss still has recorded that you no longer
+`defineWorker`) first validates every schedule's payload, then upserts them all
+and unschedules any schedule pg-boss still has recorded that you no longer
 declare. Call it on every boot with your full, current list of schedules —
 removing an entry from the list is how you turn a schedule off.
+
+Validation matters more here than anywhere else in bosskit: pg-boss dispatches
+scheduled jobs internally, so they never pass through `enqueue`. Without this
+check an invalid payload surfaces as a job that fails at 03:00, retries,
+dead-letters, and repeats every night, with nothing said at deploy time. An
+invalid payload throws `JobPlatformError` and **no** schedule is applied — never
+a partial sync from a bad payload. (This pre-flight only validates payloads: an
+invalid cron expression or a queue pg-boss hasn't created yet is still caught
+per-schedule inside the apply loop, so those can leave an earlier schedule in
+the list applied.)
+
+The check runs against the JSON round-tripped value, because that is what a
+worker parses at fire time. A `z.date()` field handed a real `Date` is valid in
+memory and invalid as the ISO string jsonb gives back — so it is rejected at
+boot, which is the point. Keep schedule payloads plainly JSON-serializable.
+
+`data` is required, and it is Zod's *output* type: a field declared with
+`.default()` must still be supplied. It is stored exactly as you write it.
 
 ## Adapters
 
@@ -426,22 +449,26 @@ with optional `max`, `applicationName` (defaults to `"bosskit"`), and
 `schema` (defaults to `"pgboss"`). Returns a plain `PgBoss` instance —
 starting, stopping, and caching it is still your responsibility.
 
-### `ScheduleDefinition<Name>` / `schedulesToRemove(declared, existing)`
+### `ScheduleOf<D>` / `ScheduleDefinition<Name>` / `schedulesToRemove(declared, existing)`
 
-`ScheduleDefinition` is the shape passed to `applySchedules`: `{ queue, cron,
-data?, options? }`. `schedulesToRemove(declared, existing)` takes your
-declared schedule list and pg-boss's existing schedules (from
-`boss.getSchedules()`) and returns the ones that are no longer declared and
-would be turned off — useful for previewing what a call to `applySchedules`
-would unschedule before you actually run it. Application code normally only
-calls `applySchedules`, which does this diff for you.
+`ScheduleOf<D>` is the shape `applySchedules` takes for registry `D`: `{ queue,
+cron, data, options? }`, with `queue` narrowed to the registry's sendable names
+and `data` to that queue's payload. `ScheduleDefinition` is the loose,
+registry-agnostic version of the same shape (`data` optional, any `queue`
+string); `schedulesToRemove` consumes it, and `ScheduleOf<D>` is assignable to
+it. `schedulesToRemove(declared, existing)` takes your declared schedule list
+and pg-boss's existing schedules (from `boss.getSchedules()`) and returns the
+ones that are no longer declared and would be turned off — useful for previewing
+what a call to `applySchedules` would unschedule before you actually run it.
+Application code normally only calls `applySchedules`, which does this diff for
+you.
 
 ### `JobPlatformError`
 
-Thrown by `createJobPlatform` itself when the registry is misconfigured (for
-example, the same queue name declared twice) — a `JobPlatformError` means a
-programming mistake in the registry, never a failed job. Standard `Error`
-subclass: catch it with `instanceof JobPlatformError`.
+Thrown by bosskit itself, never by a failed job: a misconfigured registry (the
+same queue name declared twice) or a schedule whose declared payload doesn't
+satisfy its queue's schema. Standard `Error` subclass: catch it with
+`instanceof JobPlatformError`.
 
 ### Types
 
@@ -458,6 +485,8 @@ Exported for typing your own helpers around `enqueue`/`defineWorker`:
 - **`QueuePayloadOf<D, Q>`** — the payload type for queue `Q` in registry `D`.
 - **`SendableOf<D>`** — the queue names `enqueue` accepts, with dead-letter
   targets excluded; see [Dead-letter queues](#dead-letter-queues).
+- **`ScheduleOf<D>`** — a schedule declaration bound to registry `D`, with
+  `data` typed per queue; the parameter type of `applySchedules`.
 - **`RegisteredWorker`** — the type `defineWorker` returns.
 - **`UserScoped`** — `{ userId: string }`, the inferred type of
   `UserScopedSchema`.

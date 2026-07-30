@@ -1,4 +1,4 @@
-import { type JobWithMetadata, PgBoss, type Db as PgBossDb } from "pg-boss";
+import { type JobWithMetadata, PgBoss, type Db as PgBossDb, type Schedule } from "pg-boss";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { JobPlatformError } from "./errors";
@@ -109,6 +109,29 @@ function capturingBoss(): {
   };
 }
 
+/**
+ * A real `PgBoss` (the constructor connects to nothing) with the three
+ * scheduling calls stubbed, so `applySchedules` can be driven end to end and
+ * what it *would* have sent to pg-boss can be asserted.
+ */
+function schedulingBoss(existing: Schedule[] = []): {
+  boss: PgBoss;
+  scheduled: Array<{ cron: string; data: unknown; name: string; options: unknown }>;
+  unscheduled: Array<{ key?: string; name: string }>;
+} {
+  const boss = new PgBoss("postgresql://user:pass@localhost:5432/unused");
+  const scheduled: Array<{ cron: string; data: unknown; name: string; options: unknown }> = [];
+  const unscheduled: Array<{ key?: string; name: string }> = [];
+  vi.spyOn(boss, "schedule").mockImplementation(async (name, cron, data, options) => {
+    scheduled.push({ cron, data, name, options });
+  });
+  vi.spyOn(boss, "getSchedules").mockResolvedValue(existing);
+  vi.spyOn(boss, "unschedule").mockImplementation(async (name, key) => {
+    unscheduled.push(key === undefined ? { name } : { key, name });
+  });
+  return { boss, scheduled, unscheduled };
+}
+
 describe("defineWorker payload parsing", () => {
   // The queue's schema coerces and defaults, so the raw jsonb a job carries and
   // the payload the handler is typed to receive are genuinely different values.
@@ -204,5 +227,182 @@ describe("schemaFor", () => {
     expect(() => platform.schemaFor("missing")).toThrow(JobPlatformError);
     expect(() => platform.schemaFor("missing")).toThrow(/Unknown queue "missing"/);
     expect(() => platform.schemaFor("known")).not.toThrow();
+  });
+});
+
+describe("applySchedules payload validation", () => {
+  const $Sweep = z.object({ olderThanDays: z.number(), userId: z.string() });
+  // A field that is valid in memory but NOT valid after a jsonb round trip:
+  // a Date goes in, an ISO string comes back, and z.date() rejects the string.
+  const $Dated = z.object({ at: z.date(), userId: z.string() });
+  // A schema whose parse output is a Date built FROM the round-tripped string —
+  // structurally equal to the declared value but not the same object. Only
+  // this kind of schema can tell "sent as declared" apart from "sent as
+  // parsed": `$Sweep` has no coercion, so the two are indistinguishable there.
+  const $Coerce = z.object({ at: z.coerce.date(), userId: z.string() });
+  const DEFINITIONS = defineQueues([
+    { name: "sweep", schema: $Sweep },
+    { name: "dated", schema: $Dated },
+    { name: "coerce", schema: $Coerce },
+  ]);
+
+  function platformFor(boss: PgBoss) {
+    return createJobPlatform({
+      definitions: DEFINITIONS,
+      getBoss: async () => boss,
+      getRuntime: async () => ({}),
+      logger: { error: () => {}, info: () => {}, warn: () => {} },
+      toBossDb: (): PgBossDb => ({ executeSql: () => Promise.reject(new Error("unused")) }),
+    });
+  }
+
+  it("applies a valid schedule, passing data through verbatim", async () => {
+    const { boss, scheduled } = schedulingBoss();
+    await platformFor(boss).applySchedules(boss, [
+      { cron: "0 3 * * *", data: { olderThanDays: 30, userId: "system" }, queue: "sweep" },
+    ]);
+
+    expect(scheduled).toEqual([
+      {
+        cron: "0 3 * * *",
+        data: { olderThanDays: 30, userId: "system" },
+        name: "sweep",
+        options: {},
+      },
+    ]);
+  });
+
+  it("passes options through to boss.schedule verbatim", async () => {
+    const { boss, scheduled } = schedulingBoss();
+    await platformFor(boss).applySchedules(boss, [
+      {
+        cron: "0 3 * * *",
+        data: { olderThanDays: 30, userId: "system" },
+        options: { tz: "UTC" },
+        queue: "sweep",
+      },
+    ]);
+
+    expect(scheduled).toEqual([
+      {
+        cron: "0 3 * * *",
+        data: { olderThanDays: 30, userId: "system" },
+        name: "sweep",
+        options: { tz: "UTC" },
+      },
+    ]);
+  });
+
+  it("sends data as declared, not the parse output", async () => {
+    const { boss, scheduled } = schedulingBoss();
+    const at = new Date("2026-01-01T00:00:00.000Z");
+    await platformFor(boss).applySchedules(boss, [
+      { cron: "0 3 * * *", data: { at, userId: "system" }, queue: "coerce" },
+    ]);
+
+    // Identity, not structure: the parse output would be an equal-but-distinct
+    // Date built from the round-tripped ISO string.
+    expect((scheduled[0]?.data as { at: unknown }).at).toBe(at);
+  });
+
+  it("rejects a payload that does not satisfy the queue schema, naming the queue", async () => {
+    const { boss } = schedulingBoss();
+    const platform = platformFor(boss);
+    // Coerced past the compile-time check to reach the runtime guard.
+    const bad = [
+      { cron: "0 3 * * *", data: { olderThanDays: "thirty", userId: "system" }, queue: "sweep" },
+    ] as unknown as Parameters<typeof platform.applySchedules>[1];
+
+    await expect(platform.applySchedules(boss, bad)).rejects.toThrow(JobPlatformError);
+    await expect(platform.applySchedules(boss, bad)).rejects.toThrow(/queue "sweep"/);
+  });
+
+  it("includes the key in the error label for a keyed schedule with an invalid payload", async () => {
+    const { boss } = schedulingBoss();
+    const platform = platformFor(boss);
+    // Coerced past the compile-time check to reach the runtime guard, matching
+    // the precedent above — this time with a `key` so the `(key "…")` suffix
+    // in the error label has something to assert against.
+    const bad = [
+      {
+        cron: "0 3 * * *",
+        data: { olderThanDays: "thirty", userId: "system" },
+        options: { key: "eu" },
+        queue: "sweep",
+      },
+    ] as unknown as Parameters<typeof platform.applySchedules>[1];
+
+    await expect(platform.applySchedules(boss, bad)).rejects.toThrow(/queue "sweep" \(key "eu"\)/);
+  });
+
+  it("rejects a payload that is valid in memory but invalid after the jsonb round trip", async () => {
+    const { boss, scheduled } = schedulingBoss();
+    const platform = platformFor(boss);
+
+    // `at` typechecks and would pass a naive safeParse of the in-memory value.
+    // It is only invalid once jsonb has turned the Date into a string — which
+    // is exactly what the worker will parse at fire time.
+    await expect(
+      platform.applySchedules(boss, [
+        {
+          cron: "0 4 * * *",
+          data: { at: new Date("2026-01-01T00:00:00.000Z"), userId: "system" },
+          queue: "dated",
+        },
+      ])
+    ).rejects.toThrow(JobPlatformError);
+    expect(scheduled).toEqual([]);
+  });
+
+  it("rejects a payload that is not JSON-serializable, naming the queue", async () => {
+    const { boss, scheduled } = schedulingBoss();
+    const platform = platformFor(boss);
+    // A circular reference makes JSON.stringify throw before safeParse ever
+    // runs. Coerced past the compile-time check to reach the runtime guard,
+    // matching the precedent above.
+    const circular: Record<string, unknown> = { olderThanDays: 30, userId: "system" };
+    circular.self = circular;
+    const bad = [{ cron: "0 3 * * *", data: circular, queue: "sweep" }] as unknown as Parameters<
+      typeof platform.applySchedules
+    >[1];
+
+    await expect(platform.applySchedules(boss, bad)).rejects.toThrow(JobPlatformError);
+    await expect(platform.applySchedules(boss, bad)).rejects.toThrow(/queue "sweep"/);
+    expect(scheduled).toEqual([]);
+  });
+
+  it("validates every schedule before applying any", async () => {
+    const { boss, scheduled, unscheduled } = schedulingBoss();
+    const platform = platformFor(boss);
+    const mixed = [
+      { cron: "0 3 * * *", data: { olderThanDays: 30, userId: "system" }, queue: "sweep" },
+      { cron: "0 5 * * *", data: { olderThanDays: "nope", userId: "system" }, queue: "sweep" },
+    ] as unknown as Parameters<typeof platform.applySchedules>[1];
+
+    await expect(platform.applySchedules(boss, mixed)).rejects.toThrow(JobPlatformError);
+    // The valid first entry must NOT have been applied, and nothing pruned.
+    expect(scheduled).toEqual([]);
+    expect(unscheduled).toEqual([]);
+  });
+
+  it("still prunes schedules that are no longer declared", async () => {
+    const { boss, unscheduled } = schedulingBoss([
+      { cron: "0 3 * * *", key: "", name: "sweep", timezone: "UTC" },
+      { cron: "0 9 * * *", key: "eu", name: "sweep", timezone: "UTC" },
+    ]);
+    await platformFor(boss).applySchedules(boss, [
+      { cron: "0 3 * * *", data: { olderThanDays: 30, userId: "system" }, queue: "sweep" },
+    ]);
+
+    expect(unscheduled).toEqual([{ key: "eu", name: "sweep" }]);
+  });
+
+  it("unschedules by name alone when the stale schedule has no key", async () => {
+    const { boss, unscheduled } = schedulingBoss([
+      { cron: "0 3 * * *", key: "", name: "stale", timezone: "UTC" },
+    ]);
+    await platformFor(boss).applySchedules(boss, []);
+
+    expect(unscheduled).toEqual([{ name: "stale" }]);
   });
 });

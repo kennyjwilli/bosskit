@@ -250,7 +250,11 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
             // Middleware wraps validation as well as the handler, so a bad
             // payload throws through next() where a check-in can see it.
             if (!middleware) return run();
-            return middleware({ jobs, queue: w.queue }, run);
+            // Awaited, not returned: pg-boss stores a single-job batch's
+            // resolved callback value as job output, so returning
+            // middleware's resolved value would leak it there. Awaiting
+            // keeps this handler's own resolution at `undefined`.
+            await middleware({ jobs, queue: w.queue }, run);
           }
         );
       },

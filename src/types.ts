@@ -173,8 +173,9 @@ export type RegisteredWorker = {
  *    Middleware that reports errors must rethrow.
  * 4. Not calling `next()` skips the handler and completes the job.
  *
- * Resolve to `void`. pg-boss stores a single-job batch's resolved value as job
- * output, so returning something silently starts populating it.
+ * The platform awaits this and discards whatever it resolves to, so its
+ * signature returns `Promise<void>` — there is no channel back into pg-boss's
+ * job output.
  */
 export type JobMiddleware<TName extends string = string> = (
   ctx: { jobs: JobWithMetadata<unknown>[]; queue: TName },

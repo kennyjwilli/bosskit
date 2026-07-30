@@ -215,6 +215,57 @@ Every job is logged before the handler runs, with its queue, job id, retry
 count, and the acting `userId` (when the queue is user-scoped) — so no
 handler has to remember to trace who a job is for.
 
+### Middleware
+
+Concerns that must apply to *every* worker — tracing, alerting, log context —
+go on the platform rather than in each handler, so one forgotten worker cannot
+silently lose them:
+
+```ts
+export const { defineWorker } = createJobPlatform({
+  // ...definitions, providers, logger
+  middleware: async (ctx, next) => {
+    const span = tracer.startSpan(`job.${ctx.queue}`);
+    try {
+      await next();
+    } catch (err) {
+      span.recordException(err);
+      throw err; // rethrow, or the job is marked complete — see below
+    } finally {
+      span.end();
+    }
+  },
+});
+```
+
+Middleware wraps **payload validation as well as the handler**, so a payload
+that fails its schema throws through `next()` where your middleware can see it.
+That is deliberate: an invalid payload is exactly the kind of thing you want
+alerting on, and it would otherwise fail before the handler ever ran.
+
+For the same reason `ctx.jobs` is `JobWithMetadata<unknown>[]` — those payloads
+have not been validated yet, so coercions and defaults are unapplied and the
+data may not satisfy the schema at all. `ctx.queue` keeps its exact literal
+type, so branching on the queue name is fully checked.
+
+Three behaviors worth knowing before you write one:
+
+- It runs **once per batch**, not once per job. Identical at the default
+  `batchSize` of 1; not above it.
+- **Swallowing an error marks the job complete.** pg-boss completes a batch when
+  the callback resolves, so catching without rethrowing suppresses the retry
+  *and* the dead-letter hop. Rethrow unless you mean to discard the job.
+- **Not calling `next()` skips the handler** and completes the job.
+
+The platform `await`s your middleware and discards whatever it resolves to, so
+there is no channel back into pg-boss's job output. `JobMiddleware`'s signature
+returns `Promise<void>`, so middleware that tries to resolve to something else
+fails to compile (`TS2322`) rather than silently leaking a value.
+
+Middleware is platform-level only — there is no per-worker override. That is
+the point: a hook you can forget on one worker does not solve the problem this
+one exists for.
+
 ## Schedules
 
 ```ts
@@ -382,8 +433,9 @@ release doesn't require a disposable Postgres container on hand.
 The framework's entry point. Takes `definitions` (a registry from
 `defineQueues`), `getBoss` (resolves a started `PgBoss` instance),
 `getRuntime` (resolves the context object passed to every worker handler),
-`toBossDb` (adapts your database handle to pg-boss's `Db` contract), and
-`logger`.
+`toBossDb` (adapts your database handle to pg-boss's `Db` contract),
+`logger`, and an optional `middleware` — a platform-level hook wrapping every
+worker's payload validation and handler; see [Middleware](#middleware).
 
 Two rules to follow when writing the providers:
 
@@ -476,6 +528,8 @@ Exported for typing your own helpers around `enqueue`/`defineWorker`:
 
 - **`JobLogger`** — the logging interface `createJobPlatform` expects;
   satisfied by a pino logger or `console`.
+- **`JobMiddleware<TName>`** — the platform-level hook wrapping every worker's
+  validation and handler; see [Middleware](#middleware).
 - **`JobOptions`** — the options `enqueue` accepts alongside `data` (pg-boss's
   own send options, minus `db`, which the platform supplies for you).
 - **`QueueDefinition`** — one entry in a registry: `{ name, schema, global?,

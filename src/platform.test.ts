@@ -19,6 +19,13 @@ import {
 
 const $Payload = z.object({ userId: z.string() });
 
+/**
+ * A logger that discards everything. Most tests here assert behavior rather
+ * than log output, and a real `console` would bury the run in "job received"
+ * lines. The tests that DO assert logging pass their own spy instead.
+ */
+const SILENT_LOGGER: JobLogger = { error: () => {}, info: () => {}, warn: () => {} };
+
 /** The providers are irrelevant to registry validation; these never run. */
 const PROVIDERS = {
   getBoss: () => Promise.reject(new Error("unused")),
@@ -163,6 +170,54 @@ function schedulingBoss(existing: Schedule[] = []): {
   return { boss, scheduled, unscheduled };
 }
 
+/**
+ * An existing queue as `boss.getQueue` reports it. `ensureQueues` only reads
+ * truthiness, but `QueueResult` carries statistics columns, so they are filled
+ * in with values nothing under test reads.
+ */
+function queueResult(name: string): QueueResult {
+  const now = new Date("2026-01-01T00:00:00.000Z");
+  return {
+    activeCount: 0,
+    createdOn: now,
+    deferredCount: 0,
+    failedCount: 0,
+    name,
+    queuedCount: 0,
+    readyCount: 0,
+    singletonsActive: null,
+    table: name,
+    totalCount: 0,
+    updatedOn: now,
+  };
+}
+
+/**
+ * A real `PgBoss` (the constructor connects to nothing) with the three queue
+ * calls stubbed. `existing` names the queues pg-boss already has, which is what
+ * selects the create branch over the update branch — and therefore what
+ * separates a first boot from every boot after it.
+ */
+function queueBoss(existing: string[]): {
+  boss: PgBoss;
+  created: string[];
+  updated: Array<{ name: string; options: object }>;
+} {
+  const boss = new PgBoss("postgresql://user:pass@localhost:5432/unused");
+  const created: string[] = [];
+  const updated: Array<{ name: string; options: object }> = [];
+  vi.spyOn(boss, "getQueue").mockImplementation(async (name) =>
+    existing.includes(name) ? queueResult(name) : null
+  );
+  vi.spyOn(boss, "createQueue").mockImplementation(async (name) => {
+    created.push(name);
+  });
+  vi.spyOn(boss, "updateQueue").mockImplementation(async (name, options) => {
+    updated.push({ name, options: options ?? {} });
+  });
+  return { boss, created, updated };
+}
+
 describe("defineWorker payload parsing", () => {
   // The queue's schema coerces and defaults, so the raw jsonb a job carries and
   // the payload the handler is typed to receive are genuinely different values.
@@ -185,7 +240,7 @@ describe("defineWorker payload parsing", () => {
       definitions: DEFINITIONS,
       getBoss: async () => boss,
       getRuntime: async () => ({ tag: "runtime" }),
-      logger: logger ?? { error: () => {}, info: () => {}, warn: () => {} },
+      logger: logger ?? SILENT_LOGGER,
       toBossDb: (): PgBossDb => ({ executeSql: () => Promise.reject(new Error("unused")) }),
     });
   }
@@ -358,7 +413,7 @@ describe("applySchedules payload validation", () => {
       definitions: DEFINITIONS,
       getBoss: async () => boss,
       getRuntime: async () => ({}),
-      logger: { error: () => {}, info: () => {}, warn: () => {} },
+      logger: SILENT_LOGGER,
       toBossDb: (): PgBossDb => ({ executeSql: () => Promise.reject(new Error("unused")) }),
     });
   }
@@ -530,7 +585,7 @@ describe("platform middleware", () => {
       definitions: DEFINITIONS,
       getBoss: async () => boss,
       getRuntime: async () => ({ tag: "runtime" }),
-      logger: { error: () => {}, info: () => {}, warn: () => {} },
+      logger: SILENT_LOGGER,
       middleware,
       toBossDb: (): PgBossDb => ({ executeSql: () => Promise.reject(new Error("unused")) }),
     });
@@ -742,57 +797,7 @@ describe("platform middleware", () => {
   });
 });
 
-/**
- * An existing queue as `boss.getQueue` reports it. `ensureQueues` only reads
- * truthiness, but `QueueResult` carries statistics columns, so they are filled
- * in with values nothing under test reads.
- */
-function queueResult(name: string): QueueResult {
-  const now = new Date("2026-01-01T00:00:00.000Z");
-  return {
-    activeCount: 0,
-    createdOn: now,
-    deferredCount: 0,
-    failedCount: 0,
-    name,
-    queuedCount: 0,
-    readyCount: 0,
-    singletonsActive: null,
-    table: name,
-    totalCount: 0,
-    updatedOn: now,
-  };
-}
-
 describe("ensureQueues", () => {
-  const SILENT: JobLogger = { error: () => {}, info: () => {}, warn: () => {} };
-
-  /**
-   * A real `PgBoss` (the constructor connects to nothing) with the three queue
-   * calls stubbed. `existing` names the queues pg-boss already has, which is
-   * what selects the create branch over the update branch — and therefore what
-   * separates a first boot from every boot after it.
-   */
-  function queueBoss(existing: string[]): {
-    boss: PgBoss;
-    created: string[];
-    updated: Array<{ name: string; options: object }>;
-  } {
-    const boss = new PgBoss("postgresql://user:pass@localhost:5432/unused");
-    const created: string[] = [];
-    const updated: Array<{ name: string; options: object }> = [];
-    vi.spyOn(boss, "getQueue").mockImplementation(async (name) =>
-      existing.includes(name) ? queueResult(name) : null
-    );
-    vi.spyOn(boss, "createQueue").mockImplementation(async (name) => {
-      created.push(name);
-    });
-    vi.spyOn(boss, "updateQueue").mockImplementation(async (name, options) => {
-      updated.push({ name, options: options ?? {} });
-    });
-    return { boss, created, updated };
-  }
-
   function platformFor(
     boss: PgBoss,
     definitions: Parameters<typeof createJobPlatform>[0]["definitions"]
@@ -801,7 +806,7 @@ describe("ensureQueues", () => {
       definitions,
       getBoss: async () => boss,
       getRuntime: async () => ({}),
-      logger: SILENT,
+      logger: SILENT_LOGGER,
       toBossDb: (): PgBossDb => ({ executeSql: () => Promise.reject(new Error("unused")) }),
     });
   }

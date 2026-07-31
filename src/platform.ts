@@ -282,7 +282,15 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
       const existing = await boss.getQueue(def.name);
       if (existing) {
         const { policy: _policy, partition: _partition, ...updatable } = options;
-        await boss.updateQueue(def.name, updatable);
+        // Skip the update when there is nothing to update: pg-boss asserts
+        // "no properties found to update" and throws. That is reachable on the
+        // documented happy path — a queue declared with no `options` at all, or
+        // with only the immutable `policy`/`partition` stripped above — and it
+        // only bites on the SECOND boot, once the queue exists and this takes
+        // the update branch instead of the create branch.
+        if (Object.keys(updatable).length > 0) {
+          await boss.updateQueue(def.name, updatable);
+        }
       } else {
         await boss.createQueue(def.name, options);
         logger.info({ queue: def.name }, "queue created");

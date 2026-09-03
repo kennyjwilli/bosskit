@@ -372,22 +372,18 @@ await db.transaction(async (tx) => {
 ```
 
 For `tx` to typecheck as `enqueue`'s `db` argument, the type you use for `Db`
-(the parameter type of your `toBossDb` function) must be drizzle's abstract
-`PgDatabase` supertype, not the type `drizzle(...)` itself returns — the
-concrete type rejects a transaction handle. With drizzle over postgres-js, the
-spelling that accepts both a pool handle and a transaction handle is:
+(the parameter type of your `toBossDb` function) must not be the type
+`drizzle(...)` returns. That is `PostgresJsDatabase<TSchema> & { $client }`, and
+a transaction has no `$client`. Name the class instead (`NodePgDatabase` for
+node-postgres, and so on):
 
 ```ts
-import type { PgDatabase } from "drizzle-orm/pg-core";
-import type { PostgresJsQueryResultHKT } from "drizzle-orm/postgres-js";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import * as schema from "./schema";
 
-type Db = PgDatabase<PostgresJsQueryResultHKT, Record<string, unknown>>;
+// Adds only a static brand over PgDatabase, so a transaction is assignable.
+type Db = PostgresJsDatabase<typeof schema>;
 ```
-
-Both type arguments matter: leaving the schema parameter at its default
-(`Record<string, never>`) rejects a handle created with a schema, and the
-first one names the driver. Swap `PostgresJsQueryResultHKT` for your driver's
-equivalent (`NodePgQueryResultHKT`, and so on).
 
 ## Testing / contributing
 

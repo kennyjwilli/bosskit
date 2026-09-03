@@ -12,18 +12,20 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     }
   },
   "scripts": {
     "build": "tsup",
+    "check:exports": "node -e \"require('bosskit')\" && node --input-type=module -e \"import 'bosskit'\"",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "typecheck": "tsc --noEmit",
     "check": "biome check .",
     "check:fix": "biome check --write .",
-    "prepublishOnly": "pnpm check && pnpm typecheck && pnpm test && pnpm build"
+    "prepublishOnly": "pnpm check && pnpm typecheck && pnpm test && pnpm build && pnpm check:exports"
   },
   "homepage": "https://github.com/kennyjwilli/bosskit#readme",
   "bugs": {

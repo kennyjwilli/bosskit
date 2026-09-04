@@ -161,7 +161,7 @@ export type RegisteredWorker = {
  * queue's payload would be a lie. `queue` keeps its exact literal type, so
  * branching on queue name is fully checked.
  *
- * Properties that will bite you if you don't know them:
+ * Properties to know before writing one:
  *
  * 1. Runs once per BATCH, not once per job. Identical at the default
  *    `batchSize` of 1; not above it.

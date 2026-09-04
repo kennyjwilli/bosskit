@@ -84,7 +84,7 @@ function parseJobBatch<T>(
  * - `logger` — the platform never reaches for a global logger.
  * - `middleware` — optional, wraps every worker's payload validation and
  *   handler. Platform-level so it cannot be forgotten on one worker; see
- *   `JobMiddleware` for the behaviors that will bite you.
+ *   `JobMiddleware` for the behaviors to know before writing one.
  *
  * All three type parameters are inferred from the call, so you never write an
  * explicit type argument. `const D` preserves the literal registry tuple, which
@@ -250,7 +250,7 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
               });
             };
             // Middleware wraps validation as well as the handler, so a bad
-            // payload throws through next() where a check-in can see it.
+            // payload throws through next() where middleware can observe it.
             if (!middleware) return run();
             // Awaited, not returned: pg-boss stores a single-job batch's
             // resolved callback value as job output, so returning

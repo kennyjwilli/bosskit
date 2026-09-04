@@ -70,10 +70,10 @@ export function schedulesToRemove(
  * Validates what the WORKER will see, not what was declared. Schedule data is
  * stored as jsonb and re-read at fire time, so a schema field that accepts a
  * non-JSON value — z.date(), z.instanceof(), z.map() — would pass on the
- * in-memory value and still fail every night on the string it became.
- * Simulating the round trip is what makes this check honest. Scheduled jobs
- * never pass through `enqueue`, so this is the only chance to catch it before
- * 03:00.
+ * in-memory value and still fail at fire time on the string it became.
+ * Validating the round-tripped value checks what the worker will actually
+ * parse. Scheduled jobs never pass through `enqueue`, so this is the only
+ * place to catch it before the schedule fires.
  *
  * The round trip itself can throw before safeParse ever runs — a BigInt, a
  * circular reference, or (reachable when a caller's registry type has widened
@@ -108,7 +108,7 @@ export function assertValidSchedulePayload(
  * A schedule declaration bound to one registry. Distributing over the sendable
  * queue names is what types `data` per queue: a schedule for queue "a" must
  * carry queue "a"'s payload, so a mismatched or missing payload is a compile
- * error rather than a job that fails every night at 03:00 forever.
+ * error rather than a job that fails every time the schedule fires.
  *
  * Dead-letter queues are excluded (`SendableOf`, not `QueueNameOf`) for the
  * same reason `enqueue` excludes them: pg-boss populates a DLQ itself.

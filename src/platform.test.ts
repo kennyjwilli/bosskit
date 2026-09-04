@@ -308,8 +308,7 @@ describe("defineWorker payload parsing", () => {
     expect(handlerRan).toBe(false);
   });
 
-  // Moved from `describe("platform middleware")`: this exercises
-  // `parseJobBatch`'s logging, not middleware, and belongs with the rest of
+  // This exercises `parseJobBatch`'s logging, not middleware, so it lives with
   // the parsing tests. `jobRow`'s `name`/`retryCount` overrides deliberately
   // differ from the asserted `queue` and the real `retryCount`'s zero value,
   // so a logger reading `job.name` instead of `queue`, or hardcoding

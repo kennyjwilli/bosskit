@@ -181,7 +181,12 @@ describe("middleware and schedules (integration)", () => {
     await platform.ensureQueues(boss);
     const at = new Date("2026-01-01T00:00:00.000Z");
     await platform.applySchedules(boss, [
-      { cron: "0 3 * * *", data: { at }, queue: "schedule-probe" },
+      {
+        cron: "0 3 * * *",
+        data: { at },
+        options: { expireInSeconds: 300 },
+        queue: "schedule-probe",
+      },
     ]);
 
     const stored = (await boss.getSchedules()).find((s) => s.name === "schedule-probe");
@@ -190,5 +195,10 @@ describe("middleware and schedules (integration)", () => {
     // Not a Date: jsonb has no date type, so it comes back as the ISO string.
     expect(typeof storedAt).toBe("string");
     expect(storedAt).toBe("2026-01-01T00:00:00.000Z");
+    // The send option is stored on the schedule row alongside `data`, so it
+    // reaches every job the schedule fires.
+    expect((stored?.options as { expireInSeconds?: number } | undefined)?.expireInSeconds).toBe(
+      300
+    );
   }, 60_000);
 });

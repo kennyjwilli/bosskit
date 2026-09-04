@@ -1,6 +1,16 @@
+import type { ScheduleOptions } from "pg-boss";
 import { z } from "zod";
 import { JobPlatformError } from "./errors";
 import type { QueueDefinition, QueuePayloadOf, SendableOf } from "./types";
+
+/**
+ * pg-boss's `ScheduleOptions` without `db`. Beyond `tz` and `key`, that is the
+ * full set of send options: pg-boss stores them on the schedule row and applies
+ * them to every job the schedule creates, so `expireInSeconds` or `retryLimit`
+ * set here govern each of those jobs. `db` is excluded because bosskit chooses
+ * the connection pg-boss calls run on, exactly as it does for `JobOptions`.
+ */
+type ScheduleSendOptions = Omit<ScheduleOptions, "db">;
 
 /**
  * The loose, registry-agnostic shape of a declared schedule: `data` is
@@ -18,12 +28,8 @@ export type ScheduleDefinition<Name extends string = string> = {
   cron: string;
   /** Plain JSON-serializable data (no Dates/class instances) — it round-trips through jsonb. */
   data?: object;
-  options?: {
-    /** IANA time zone; pg-boss defaults to UTC. */
-    tz?: string;
-    /** Unique key when one queue needs multiple schedules. */
-    key?: string;
-  };
+  /** pg-boss `ScheduleOptions` without `db`; see `ScheduleSendOptions`. */
+  options?: ScheduleSendOptions;
 };
 
 /**
@@ -116,12 +122,8 @@ export type ScheduleOf<D extends readonly QueueDefinition[]> = {
     cron: string;
     /** This queue's payload. Must be JSON-round-trippable; it is stored as jsonb. */
     data: QueuePayloadOf<D, Q>;
-    options?: {
-      /** Unique key when one queue needs multiple schedules. */
-      key?: string;
-      /** IANA time zone; pg-boss defaults to UTC. */
-      tz?: string;
-    };
+    /** pg-boss `ScheduleOptions` without `db`; see `ScheduleSendOptions`. */
+    options?: ScheduleSendOptions;
     /** Queue that receives the scheduled job. */
     queue: Q;
   };

@@ -307,14 +307,13 @@ boot, which is the point. Keep schedule payloads plainly JSON-serializable.
 `data` is required, and it is Zod's *output* type: a field declared with
 `.default()` must still be supplied. It is stored exactly as you write it.
 
-`options` accepts pg-boss's own `ScheduleOptions` minus `db`: `tz` and `key`,
+`options` accepts pg-boss's `ScheduleOptions` without `db`: `tz` and `key`,
 plus any send option — `expireInSeconds`, `retryLimit`, `retryBackoff`,
 `deadLetter`, `priority`, and so on. pg-boss stores them on the schedule row and
-applies them to every job the schedule fires, so a per-schedule
-`expireInSeconds` is a real, **enforced** runtime budget: a job still running
-past it fails, and retries or dead-letters like any other failure. `db` is
-omitted for the same reason it is omitted from `enqueue`'s `JobOptions` — the
-platform threads it.
+applies them to every job the schedule creates, so `expireInSeconds` set on a
+schedule bounds each of its jobs: one still running past it is failed by pg-boss
+and then retries or dead-letters like any other failure. `db` is excluded because
+bosskit chooses the connection, as it does for `enqueue`'s `JobOptions`.
 
 ```ts
 { cron: "0 3 * * *", data: { olderThanDays: 30 }, options: { expireInSeconds: 1800, tz: "UTC" }, queue: "nightly-cleanup" },

@@ -307,6 +307,18 @@ boot, which is the point. Keep schedule payloads plainly JSON-serializable.
 `data` is required, and it is Zod's *output* type: a field declared with
 `.default()` must still be supplied. It is stored exactly as you write it.
 
+`options` accepts pg-boss's `ScheduleOptions` without `db`: `tz` and `key`,
+plus any send option — `expireInSeconds`, `retryLimit`, `retryBackoff`,
+`deadLetter`, `priority`, and so on. pg-boss stores them on the schedule row and
+applies them to every job the schedule creates, so `expireInSeconds` set on a
+schedule bounds each of its jobs: one still running past it is failed by pg-boss
+and then retries or dead-letters like any other failure. `db` is excluded because
+bosskit chooses the connection, as it does for `enqueue`'s `JobOptions`.
+
+```ts
+{ cron: "0 3 * * *", data: { olderThanDays: 30 }, options: { expireInSeconds: 1800, tz: "UTC" }, queue: "nightly-cleanup" },
+```
+
 ## Adapters
 
 `enqueue` takes a `db` handle and adapts it to pg-boss's own database contract
@@ -500,8 +512,9 @@ starting, stopping, and caching it is still your responsibility.
 ### `ScheduleOf<D>` / `ScheduleDefinition<Name>` / `schedulesToRemove(declared, existing)`
 
 `ScheduleOf<D>` is the shape `applySchedules` takes for registry `D`: `{ queue,
-cron, data, options? }`, with `queue` narrowed to the registry's sendable names
-and `data` to that queue's payload. `ScheduleDefinition` is the loose,
+cron, data, options? }`, with `queue` narrowed to the registry's sendable names,
+`data` to that queue's payload, and `options` to pg-boss's `ScheduleOptions`
+minus `db` (so `tz`, `key`, and every send option such as `expireInSeconds`). `ScheduleDefinition` is the loose,
 registry-agnostic version of the same shape (`data` optional, any `queue`
 string); `schedulesToRemove` consumes it, and `ScheduleOf<D>` is assignable to
 it. `schedulesToRemove(declared, existing)` takes your declared schedule list

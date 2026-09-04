@@ -455,6 +455,23 @@ describe("applySchedules payload validation", () => {
     ]);
   });
 
+  it("forwards a per-schedule expireInSeconds to boss.schedule", async () => {
+    // `applySchedules` passes `options` through verbatim; this pins that a send
+    // option — not only `tz`/`key` — reaches pg-boss, without which the wider
+    // type would be decorative.
+    const { boss, scheduled } = schedulingBoss();
+    await platformFor(boss).applySchedules(boss, [
+      {
+        cron: "0 3 * * *",
+        data: { olderThanDays: 30, userId: "system" },
+        options: { expireInSeconds: 300, tz: "UTC" },
+        queue: "sweep",
+      },
+    ]);
+
+    expect(scheduled[0]?.options).toEqual({ expireInSeconds: 300, tz: "UTC" });
+  });
+
   it("sends data as declared, not the parse output", async () => {
     const { boss, scheduled } = schedulingBoss();
     const at = new Date("2026-01-01T00:00:00.000Z");

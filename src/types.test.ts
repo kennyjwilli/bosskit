@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import type { ScheduleOf } from "./schedules";
+import type { ScheduleDefinition, ScheduleOf } from "./schedules";
 import { UserScopedSchema, defineQueues } from "./types";
 import type { QueueDefinition, QueuePayloadOf, SendableOf } from "./types";
 
@@ -116,5 +116,29 @@ describe("ScheduleOf", () => {
     expect(wrongData.queue).toBe("beta");
     expect(dlqTarget.queue).toBe("alpha-dlq");
     expect(noData.queue).toBe("alpha");
+  });
+  it("accepts pg-boss's own ScheduleOptions on `options`, minus `db`", () => {
+    // pg-boss stores a schedule's options on the row and applies them to every
+    // job the schedule creates, so a send option like `expireInSeconds` belongs
+    // here — not only `tz` and `key`.
+    const budgeted: ScheduleOf<typeof QUEUES> = {
+      cron: "0 3 * * *",
+      data: { runId: "r", userId: "u" },
+      options: { expireInSeconds: 300, retryLimit: 1, tz: "UTC" },
+      queue: "alpha",
+    };
+    const loose: ScheduleDefinition = {
+      cron: "0 3 * * *",
+      options: { expireInSeconds: 60, key: "eu" },
+      queue: "anything",
+    };
+
+    // @ts-expect-error `db` is the platform's to thread, never a schedule's — same rule as JobOptions
+    // biome-ignore format: must stay on one line — TS reports this error on the `options` property, so reflowing it would leave the directive above unused (TS2578) and break the build
+    const withDb: ScheduleOf<typeof QUEUES> = { cron: "0 3 * * *", data: { runId: "r", userId: "u" }, options: { db: { executeSql: async () => ({ rows: [] }) } }, queue: "alpha" };
+
+    expect(budgeted.options?.expireInSeconds).toBe(300);
+    expect(loose.options?.expireInSeconds).toBe(60);
+    expect(withDb.queue).toBe("alpha");
   });
 });

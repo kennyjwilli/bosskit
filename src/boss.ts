@@ -1,35 +1,17 @@
-import { PgBoss } from "pg-boss";
+import { type ConstructorOptions, PgBoss } from "pg-boss";
 import type { JobLogger } from "./types";
 
 /**
- * Pure factory — no caching, no process hooks, no config reading. Owning the
- * boss lifecycle (singleton caching, shutdown hooks, reading connection
- * settings) is the application's job.
- *
- * The `error` and `warning` handlers are the reason to prefer this over
- * `new PgBoss(...)` directly: an unhandled pg-boss `error` event crashes the
- * Node process.
+ * `new PgBoss()` with its `error` event handled; unhandled, that event crashes
+ * the process. `migrate` is required where pg-boss defaults it: whether this
+ * process installs the schema is a decision every deployment has to make.
  */
-export function createBoss(args: {
-  connectionString: string;
-  migrate: boolean;
-  max?: number;
-  /** Surfaces in `pg_stat_activity` — set it to something you can grep for. */
-  applicationName?: string;
-  /** Postgres schema pg-boss owns. Defaults to pg-boss's own default. */
-  schema?: string;
-  logger: JobLogger;
-}): PgBoss {
-  const boss = new PgBoss({
-    application_name: args.applicationName ?? "bosskit",
-    connectionString: args.connectionString,
-    max: args.max ?? 5,
-    migrate: args.migrate,
-    schema: args.schema ?? "pgboss",
-    useListenNotify: true,
-  });
-  // Mandatory: an unhandled 'error' event would crash the Node process.
-  boss.on("error", (err) => args.logger.error({ err }, "pg-boss error"));
-  boss.on("warning", (warning) => args.logger.warn({ warning }, "pg-boss warning"));
+export function createBoss(
+  options: ConstructorOptions & { migrate: boolean; logger: JobLogger }
+): PgBoss {
+  const { logger, ...pgBossOptions } = options;
+  const boss = new PgBoss(pgBossOptions);
+  boss.on("error", (err) => logger.error({ err }, "pg-boss error"));
+  boss.on("warning", (warning) => logger.warn({ warning }, "pg-boss warning"));
   return boss;
 }

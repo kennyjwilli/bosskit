@@ -17,14 +17,7 @@ export function createBoss(
   options: ConstructorOptions & { migrate: boolean; logger: JobLogger }
 ): PgBoss {
   const { logger, ...pgBossOptions } = options;
-  const boss = new PgBoss({
-    // Surfaces in pg_stat_activity — worth overriding with something you can grep for.
-    application_name: "bosskit",
-    max: 5,
-    schema: "pgboss",
-    useListenNotify: true,
-    ...pgBossOptions,
-  });
+  const boss = new PgBoss(pgBossOptions);
   // Mandatory: an unhandled 'error' event would crash the Node process.
   boss.on("error", (err) => logger.error({ err }, "pg-boss error"));
   boss.on("warning", (warning) => logger.warn({ warning }, "pg-boss warning"));

@@ -504,9 +504,8 @@ payload schema should `.extend()`.
 A thin `PgBoss` factory that wires the `error`/`warning` events to your
 logger so an unhandled pg-boss `error` event can't crash the process. Takes
 pg-boss's own constructor options plus `logger`, with `migrate` required (every
-deployment has to decide whether this process installs the schema), and fills
-in defaults you can override: `application_name: "bosskit"`, `max: 5`,
-`schema: "pgboss"`, `useListenNotify: true`. A process that only sends — an
+deployment has to decide whether this process installs the schema); every other
+option keeps pg-boss's default. A process that only sends — an
 operator script that enqueues one job and exits — passes
 `supervise: false, schedule: false` so it runs no maintenance and no cron tick
 against a database another process owns. Returns a plain `PgBoss` instance —

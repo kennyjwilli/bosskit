@@ -63,7 +63,7 @@ describe("pg-boss lifecycle", () => {
 
   it("reports its application name to postgres", async () => {
     const boss = createBoss({
-      applicationName: "bosskit-probe",
+      application_name: "bosskit-probe",
       connectionString: url,
       logger: console,
       migrate: true,

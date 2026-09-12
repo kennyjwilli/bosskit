@@ -501,17 +501,16 @@ payload schema should `.extend()`.
 
 ### `createBoss(options)`
 
-A thin, opinionated `PgBoss` factory: sets `application_name`, a default
-`max` pool size (`5`) and `schema` (`"pgboss"`), and wires the
-`error`/`warning` events to your logger so an unhandled pg-boss `error` event
-can't crash the process. Takes `connectionString`, `migrate`, and `logger`,
-with optional `max`, `applicationName` (defaults to `"bosskit"`), `schema`
-(defaults to `"pgboss"`), and pg-boss's `supervise` / `schedule` toggles
-(both default on). A process that only sends — an operator script that
-enqueues one job and exits — passes `supervise: false, schedule: false` so it
-runs no maintenance and no cron tick against a database another process owns.
-Returns a plain `PgBoss` instance — starting, stopping, and caching it is still
-your responsibility.
+A thin `PgBoss` factory that wires the `error`/`warning` events to your
+logger so an unhandled pg-boss `error` event can't crash the process. Takes
+pg-boss's own constructor options plus `logger`, with `migrate` required (every
+deployment has to decide whether this process installs the schema), and fills
+in defaults you can override: `application_name: "bosskit"`, `max: 5`,
+`schema: "pgboss"`, `useListenNotify: true`. A process that only sends — an
+operator script that enqueues one job and exits — passes
+`supervise: false, schedule: false` so it runs no maintenance and no cron tick
+against a database another process owns. Returns a plain `PgBoss` instance —
+starting, stopping, and caching it is still your responsibility.
 
 ### `ScheduleOf<D>` / `ScheduleDefinition<Name>` / `schedulesToRemove(declared, existing)`
 

@@ -18,6 +18,13 @@ export function createBoss(args: {
   applicationName?: string;
   /** Postgres schema pg-boss owns. Defaults to pg-boss's own default. */
   schema?: string;
+  /**
+   * pg-boss's background loops, on by default as in pg-boss. A process that
+   * only sends — an operator script — turns both off, so it runs no
+   * maintenance and no cron tick against a database another process owns.
+   */
+  supervise?: boolean;
+  schedule?: boolean;
   logger: JobLogger;
 }): PgBoss {
   const boss = new PgBoss({
@@ -25,7 +32,9 @@ export function createBoss(args: {
     connectionString: args.connectionString,
     max: args.max ?? 5,
     migrate: args.migrate,
+    schedule: args.schedule ?? true,
     schema: args.schema ?? "pgboss",
+    supervise: args.supervise ?? true,
     useListenNotify: true,
   });
   // Mandatory: an unhandled 'error' event would crash the Node process.

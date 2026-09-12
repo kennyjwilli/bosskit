@@ -39,6 +39,28 @@ describe("pg-boss lifecycle", () => {
     }
   });
 
+  it("runs no cron worker when schedule is off", async () => {
+    // pg-boss's scheduler registers itself as a worker on its own queue at
+    // start; a send-only process must leave that to the process that owns the
+    // schedules. A fresh database shows whether the queue was ever created.
+    const { url: url3, teardown: teardown3 } = await setupTestDb({
+      testFile: import.meta.url,
+    });
+    const boss = createBoss({
+      connectionString: url3,
+      logger: console,
+      migrate: true,
+      schedule: false,
+    });
+    await boss.start();
+    try {
+      expect(await boss.getQueue("__pgboss__send-it")).toBeNull();
+    } finally {
+      await boss.stop({ graceful: false });
+      await teardown3();
+    }
+  });
+
   it("reports its application name to postgres", async () => {
     const boss = createBoss({
       applicationName: "bosskit-probe",

@@ -430,6 +430,17 @@ pnpm test:integration
 pnpm build
 ```
 
+### Releasing
+
+```sh
+pnpm release minor   # or patch / major
+npm publish
+```
+
+`release` runs the gate, bumps `package.json`, reformats it (npm's own
+serialization is not Biome's), commits `chore: release x.y.z`, tags `vx.y.z`,
+and pushes both. Don't run `npm version` by hand.
+
 `pnpm prepublishOnly` runs `check`, `typecheck`, `test`, and `build` before
 every release; `test:integration` is deliberately not part of it, so cutting a
 release doesn't require a disposable Postgres container on hand.

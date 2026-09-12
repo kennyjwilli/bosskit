@@ -25,7 +25,11 @@
     "typecheck": "tsc --noEmit",
     "check": "biome check .",
     "check:fix": "biome check --write .",
-    "prepublishOnly": "pnpm check && pnpm typecheck && pnpm test && pnpm build && pnpm check:exports"
+    "prepublishOnly": "pnpm check && pnpm typecheck && pnpm test && pnpm build && pnpm check:exports",
+    "preversion": "pnpm check && pnpm typecheck && pnpm test",
+    "version": "biome check --write package.json && git add package.json",
+    "postversion": "git push --follow-tags",
+    "release": "npm version -m 'chore: release %s'"
   },
   "homepage": "https://github.com/kennyjwilli/bosskit#readme",
   "bugs": {

@@ -1,6 +1,6 @@
 {
   "name": "bosskit",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Type-safe, user-scoped job queues for pg-boss, powered by Zod.",
   "license": "MIT",
   "author": "Kenny Williams",

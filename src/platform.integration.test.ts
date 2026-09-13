@@ -44,7 +44,7 @@ describe("createJobPlatform (integration)", () => {
     const platform = createJobPlatform({
       definitions: DEFINITIONS,
       getBoss: async () => boss,
-      // Counted so the memoization contract is asserted, not assumed.
+      // Counted so the no-caching contract is asserted, not assumed.
       getRuntime: async () => {
         runtimeCalls += 1;
         return { tag: "runtime-value" };
@@ -67,9 +67,9 @@ describe("createJobPlatform (integration)", () => {
     // The seam under test: register resolves getBoss/getRuntime itself.
     const workerId = await worker.register(boss);
     expect(workerId).toBeTruthy();
-    // Two registrations, one runtime — the memoization a pooled runtime relies on.
+    // Two registrations, two calls — the platform keeps nothing; caching is the caller's.
     await worker.register(boss);
-    expect(runtimeCalls).toBe(1);
+    expect(runtimeCalls).toBe(2);
 
     await platform.enqueue({
       data: { note: "hello", userId: "user_probe" },

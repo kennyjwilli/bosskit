@@ -450,9 +450,9 @@ Two rules to follow when writing the providers:
 - **Annotate `toBossDb`'s parameter.** That type becomes `enqueue`'s `db`
   type. Written unannotated (`toBossDb: (db) => fromDrizzle(db, sql)`),
   `enqueue` will accept literally any value as `db`, silently.
-- **`getRuntime` runs once.** Don't compute per-call values in it (a fresh
-  request id, `Date.now()`) — whatever it returns is what every handler gets
-  for the life of the platform. Return plain data, not a class instance.
+- **`getRuntime` is yours to cache.** The platform calls it on every worker
+  registration and keeps nothing, so a provider that opens a connection pool
+  must memoize it (as `getBoss` must). Return plain data, not a class instance.
 
 Returns `{ enqueue, enqueueWith, cancelJobs, defineWorker, ensureQueues,
 applySchedules, schemaFor }` bound to that registry:

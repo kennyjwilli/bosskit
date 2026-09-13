@@ -69,11 +69,11 @@ function parseJobBatch<T>(
  * - `getRuntime` — resolves whatever context handlers should receive (say,
  *   `{ db, config }`). Its return type `R` is INFERRED, which is how handler
  *   context gets typed without this package importing your `Db`/`Config`.
- *   Resolved AT MOST ONCE for the life of the platform (see below), so anything
- *   computed per call — a fresh request id, a timestamp — would be frozen at
- *   the first value. Return a plain data object: handlers receive it via the
- *   shallow spread `{ ...runtime, jobs }`, which drops a class instance's
- *   prototype and with it every method on it.
+ *   Called on every worker registration and never cached here: like
+ *   `getBoss`, you own its caching, so a provider that opens a connection
+ *   pool must memoize it or it opens one per worker. Return a plain data
+ *   object: handlers receive it via the shallow spread `{ ...runtime, jobs }`,
+ *   which drops a class instance's prototype and with it every method on it.
  * - `toBossDb` — adapts your database handle to pg-boss's `executeSql`
  *   contract. Its parameter type `TDb` is INFERRED and becomes the `db` every
  *   enqueue takes, so this package needs no ORM: pass one of pg-boss's own
@@ -100,24 +100,6 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
   middleware?: JobMiddleware<QueueNameOf<D>>;
 }) {
   const { definitions, getBoss, getRuntime, logger, middleware, toBossDb } = platform;
-
-  /**
-   * Resolve the runtime at most once, lazily, on the first worker registration.
-   * `register` runs per worker, and a provider that allocated a connection pool
-   * per call would quietly open one per worker. The memo is cleared only when
-   * the promise rejects, so a transient failure at boot doesn't poison a later
-   * retry; a successful resolution is kept for the life of the platform.
-   */
-  let runtimePromise: Promise<R> | undefined;
-  function resolveRuntime(): Promise<R> {
-    if (!runtimePromise) {
-      runtimePromise = getRuntime().catch((err: unknown) => {
-        runtimePromise = undefined;
-        throw err;
-      });
-    }
-    return runtimePromise;
-  }
 
   type Name = QueueNameOf<D>;
   type Sendable = SendableOf<D>;
@@ -235,7 +217,7 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
         // Resolved at registration (boot) time, so neither depends on module
         // init order.
         const schema = schemaFor(w.queue);
-        const runtime = await resolveRuntime();
+        const runtime = await getRuntime();
         // boss.work uses `const O`, so the literal includeMetadata:true survives
         // inference → JobWithMetadata handler; ReqData infers from the annotated
         // `jobs` param. No explicit type args, no cast.

@@ -889,3 +889,42 @@ describe("ensureQueues", () => {
     expect(updated).toEqual([]);
   });
 });
+
+describe("workerDefaults", () => {
+  const DEFINITIONS = defineQueues([
+    { name: "probe", schema: $Payload },
+    { name: "probe-two", schema: $Payload },
+  ]);
+
+  it("gives every worker the defaults, with its own options winning key by key", async () => {
+    const boss = new PgBoss("postgresql://user:pass@localhost:5432/unused");
+    const optionsByQueue = new Map<string, unknown>();
+    vi.spyOn(boss, "work").mockImplementation(async (name, options) => {
+      optionsByQueue.set(name, options);
+      return "worker-id";
+    });
+    const platform = createJobPlatform({
+      ...PROVIDERS,
+      definitions: DEFINITIONS,
+      getRuntime: async () => ({}),
+      logger: SILENT_LOGGER,
+      workerDefaults: { batchSize: 5, burstWhenReadyExceeds: 10 },
+    });
+
+    await platform.defineWorker({ queue: "probe", handler: async () => {} }).register(boss);
+    await platform
+      .defineWorker({ queue: "probe-two", options: { batchSize: 1 }, handler: async () => {} })
+      .register(boss);
+
+    expect(optionsByQueue.get("probe")).toEqual({
+      batchSize: 5,
+      burstWhenReadyExceeds: 10,
+      includeMetadata: true,
+    });
+    expect(optionsByQueue.get("probe-two")).toEqual({
+      batchSize: 1,
+      burstWhenReadyExceeds: 10,
+      includeMetadata: true,
+    });
+  });
+});

@@ -453,8 +453,12 @@ The framework's entry point. Takes `definitions` (a registry from
 `defineQueues`), `getBoss` (resolves a started `PgBoss` instance),
 `getRuntime` (resolves the context object passed to every worker handler),
 `toBossDb` (adapts your database handle to pg-boss's `Db` contract),
-`logger`, and an optional `middleware` — a platform-level hook wrapping every
-worker's payload validation and handler; see [Middleware](#middleware).
+`logger`, an optional `middleware` — a platform-level hook wrapping every
+worker's payload validation and handler; see [Middleware](#middleware) — and
+optional `workerDefaults`: pg-boss work options every worker starts from, which
+a worker's own `options` override key by key. Use it for a setting most workers
+should have, so a new worker can't miss it — say `burstWhenReadyExceeds`, which
+drains a backlog without waiting out the polling interval between jobs.
 
 Two rules to follow when writing the providers:
 

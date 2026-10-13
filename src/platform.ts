@@ -85,6 +85,9 @@ function parseJobBatch<T>(
  * - `middleware` — optional, wraps every worker's payload validation and
  *   handler. Platform-level so it cannot be forgotten on one worker; see
  *   `JobMiddleware` for the behaviors to know before writing one.
+ * - `workerDefaults` — optional pg-boss work options every worker starts from;
+ *   a worker's own `options` win key by key. For a setting most workers should
+ *   have, such as `burstWhenReadyExceeds`, so a new worker can't miss it.
  *
  * All three type parameters are inferred from the call, so you never write an
  * explicit type argument. `const D` preserves the literal registry tuple, which
@@ -98,8 +101,11 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
   logger: JobLogger;
   /** Optional hook wrapping every worker's validation and handler. See `JobMiddleware`. */
   middleware?: JobMiddleware<QueueNameOf<D>>;
+  /** Work options every worker starts from; a worker's own `options` override them. */
+  workerDefaults?: Omit<WorkOptions, "includeMetadata">;
 }) {
-  const { definitions, getBoss, getRuntime, logger, middleware, toBossDb } = platform;
+  const { definitions, getBoss, getRuntime, logger, middleware, toBossDb, workerDefaults } =
+    platform;
 
   type Name = QueueNameOf<D>;
   type Sendable = SendableOf<D>;
@@ -223,7 +229,7 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
         // `jobs` param. No explicit type args, no cast.
         return boss.work(
           w.queue,
-          { ...w.options, includeMetadata: true },
+          { ...workerDefaults, ...w.options, includeMetadata: true },
           async (jobs: JobWithMetadata<Payload<Q>>[]) => {
             const run = async () => {
               await w.handler({

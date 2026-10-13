@@ -54,6 +54,19 @@ function parseJobBatch<T>(
 }
 
 /**
+ * The options without keys set to `undefined`. pg-boss validates any option key
+ * that is present, so `{ burstWhenReadyExceeds: undefined }` — a worker opting
+ * out of a platform default — would otherwise throw at registration.
+ */
+function withoutUndefined<T extends object>(options: T): Partial<T> {
+  // Narrow cast: fromEntries loses the key types, and every surviving entry
+  // came from `options` unchanged.
+  return Object.fromEntries(
+    Object.entries(options).filter(([, value]) => value !== undefined)
+  ) as Partial<T>;
+}
+
+/**
  * Build a job platform bound to one queue registry.
  *
  * This is the package's only entry point, and the reason nothing inside it
@@ -229,7 +242,7 @@ export function createJobPlatform<const D extends readonly QueueDefinition[], R,
         // `jobs` param. No explicit type args, no cast.
         return boss.work(
           w.queue,
-          { ...workerDefaults, ...w.options, includeMetadata: true },
+          { ...withoutUndefined({ ...workerDefaults, ...w.options }), includeMetadata: true },
           async (jobs: JobWithMetadata<Payload<Q>>[]) => {
             const run = async () => {
               await w.handler({

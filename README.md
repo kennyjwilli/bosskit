@@ -458,7 +458,9 @@ worker's payload validation and handler; see [Middleware](#middleware) — and
 optional `workerDefaults`: pg-boss work options every worker starts from, which
 a worker's own `options` override key by key. Use it for a setting most workers
 should have, so a new worker can't miss it — say `burstWhenReadyExceeds`, which
-drains a backlog without waiting out the polling interval between jobs.
+drains a backlog without waiting out the polling interval between jobs. A
+worker opts out of a default by setting that key to `undefined`; the key is
+then left out, and pg-boss's own default applies.
 
 Two rules to follow when writing the providers:
 

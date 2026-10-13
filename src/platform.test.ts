@@ -928,3 +928,34 @@ describe("workerDefaults", () => {
     });
   });
 });
+
+describe("worker options set to undefined", () => {
+  const DEFINITIONS = defineQueues([{ name: "probe", schema: $Payload }]);
+
+  it("leaves the key out, so a worker can opt out of a default without pg-boss rejecting it", async () => {
+    const boss = new PgBoss("postgresql://user:pass@localhost:5432/unused");
+    let received: unknown;
+    vi.spyOn(boss, "work").mockImplementation(async (_name, options) => {
+      received = options;
+      return "worker-id";
+    });
+    const platform = createJobPlatform({
+      ...PROVIDERS,
+      definitions: DEFINITIONS,
+      getRuntime: async () => ({}),
+      logger: SILENT_LOGGER,
+      workerDefaults: { batchSize: 5, burstWhenReadyExceeds: 10 },
+    });
+
+    await platform
+      .defineWorker({
+        queue: "probe",
+        options: { burstWhenReadyExceeds: undefined },
+        handler: async () => {},
+      })
+      .register(boss);
+
+    expect(received).toEqual({ batchSize: 5, includeMetadata: true });
+    expect(received).not.toHaveProperty("burstWhenReadyExceeds");
+  });
+});
